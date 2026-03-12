@@ -1,796 +1,687 @@
-# 大模型推理资源估算方法说明
+# 大模型推理 GPU 资源计算原理
 
-## 1. 文档目标
+## 1. 目标
 
-本文档用于说明单模型推理场景下的 GPU 资源估算方法，适用于本地或私有化部署场景中的容量规划、设备采购和高可用配置设计。
+本文档用于说明大模型在线推理场景下的 GPU 资源计算原理，支持：
 
-本文档重点解决以下问题：
+* 单模型推理资源估算
+* 不同架构模型的统一估算
+* 基于 GPU 厂商规格参数的前期容量规划
+* 显存约束、吞吐约束和高可用约束的综合计算
 
-1. 给定模型规模、精度、输入输出长度分布、并发数和目标吞吐，如何估算显存需求；
-2. 给定单卡显存和单卡实际吞吐，如何估算最少 GPU 数量；
-3. 在需要一定高可用保障的情况下，如何进一步估算最终采购卡数；
-4. 如何区分平均负载与高位负载，避免仅按平均值估算导致上线后 OOM 或性能不足。
-
-本文档不讨论训练，仅讨论**推理阶段**资源估算。
-
----
-
-## 2. 适用范围与基本假设
-
-### 2.1 适用范围
-
-本文档适用于以下场景：
-
-* 单一大模型在线推理；
-* 支持多类请求混合流量；
-* 支持输入/输出长度分布建模；
-* 支持并发推理；
-* 支持按显存约束、吞吐约束、高可用约束进行综合 sizing。
-
-### 2.2 基本假设
-
-为简化估算，本文采用以下工程化近似：
-
-1. 模型为 Transformer 类架构；
-2. 推理阶段总显存主要由以下部分构成：
-
-   * 权重显存；
-   * KV Cache 显存；
-   * 运行时开销；
-3. 解码阶段通常以显存带宽约束为主；
-4. 单卡吞吐优先采用实测值，理论值仅用于辅助判断；
-5. 高可用按整卡粒度进行估算，不细化到 MIG 或显存切分级别；
-6. 输入输出长度采用“分布建模”，不采用单一固定长度。
+本文档适用于前期方案设计、采购估算和部署 sizing。
+不以压测结果为前提，但保留后续校准空间。
 
 ---
 
-## 3. 估算对象与核心输出
+## 2. 统一计算框架
 
-### 3.1 输入参数
+推理资源计算统一分为两层：
 
-估算模型以以下参数为输入：
-
-#### 模型参数
-
-* 模型名称；
-* 参数量（B）；
-* 层数 `L`；
-* 隐藏维度 `H`；
-* 权重量化精度；
-* KV Cache 精度；
-* 权重额外开销比例；
-* 运行时固定开销。
-
-#### 流量参数
-
-* 并发数 `C`；
-* 总目标生成吞吐 `T_total`；
-* 总目标预填充吞吐 `P_total`（可选）；
-* 请求长度分布。
-
-#### GPU 参数
-
-* 单卡显存；
-* 单卡可安全使用显存比例；
-* 单卡显存带宽；
-* 单卡 decode 实测吞吐；
-* 单卡 prefill 实测吞吐；
-* 单卡价格（可选）。
-
-#### 高可用参数
-
-* 高可用模式；
-* 副本数；
-* 故障冗余比例；
-* 是否跨可用区冗余。
-
-### 3.2 输出结果
-
-估算结果包括：
-
-1. 平均输入/输出长度；
-2. P95 输入/输出总长度；
-3. 权重显存；
-4. 平均单请求 KV Cache；
-5. P95 单请求 KV Cache；
-6. 平均总显存；
-7. P95 总显存；
-8. 按显存约束所需 GPU 数；
-9. 按吞吐约束所需 GPU 数；
-10. 业务所需 GPU 数；
-11. 高可用附加 GPU 数；
-12. 最终采购 GPU 数。
-
----
-
-## 4. 参数定义
-
-为便于公式表达，定义如下符号：
-
-| 符号           | 含义                               |
-| ------------ | -------------------------------- |
-| `N`          | 模型参数量                            |
-| `L`          | 模型层数                             |
-| `H`          | 隐藏维度                             |
-| `b_w`        | 权重精度字节数                          |
-| `b_kv`       | KV Cache 精度字节数                   |
-| `S_in`       | 输入 token 长度                      |
-| `S_out`      | 输出 token 长度                      |
-| `S`          | 总序列长度，`S = S_in + S_out`         |
-| `C`          | 并发数                              |
-| `M_gpu`      | 单卡显存                             |
-| `r_use`      | 单卡安全可用比例                         |
-| `M_use`      | 单卡安全可用显存，`M_use = M_gpu × r_use` |
-| `T_gpu`      | 单卡 decode 实测吞吐                   |
-| `P_gpu`      | 单卡 prefill 实测吞吐                  |
-| `T_total`    | 总 decode 吞吐目标                    |
-| `P_total`    | 总 prefill 吞吐目标                   |
-| `r_overhead` | 权重额外开销比例                         |
-| `M_runtime`  | 运行时额外开销                          |
-| `K`          | 请求类型数                            |
-| `p_i`        | 第 `i` 类请求的流量占比                   |
-| `S_i`        | 第 `i` 类请求的总长度                    |
-
----
-
-## 5. 显存构成模型
-
-推理阶段总显存近似拆分为：
+### 2.1 显存层
 
 $$
-M_{total} \approx M_{weight} + M_{kv} + M_{runtime}
+M_{total} \approx M_{weights} + M_{cache} + M_{runtime}
 $$
 
 其中：
 
-* `M_weight`：模型权重显存；
-* `M_kv`：KV Cache 显存；
-* `M_runtime`：框架、缓存池、临时张量、碎片化等工程开销。
+* (M_{weights})：模型权重显存
+* (M_{cache})：推理缓存显存，通常为 KV Cache 或其变体
+* (M_{runtime})：运行时开销，包括激活值、临时张量、框架缓存池、碎片化、通信缓冲等
 
-该公式为资源估算的总框架。
-
----
-
-## 6. 权重显存估算
-
-### 6.1 基本公式
-
-模型权重显存可表示为：
+### 2.2 吞吐层
 
 $$
-M_{weight,raw} = N \times b_w
-$$
-
-换算为 GiB：
-
-$$
-M_{weight,raw}^{GiB} = \frac{N \times b_w}{1024^3}
-$$
-
-考虑量化元数据、额外 buffer、框架对权重的管理开销后：
-
-$$
-M_{weight} = M_{weight,raw}^{GiB} \times (1 + r_{overhead})
-$$
-
-### 6.2 常见精度对应字节数
-
-| 精度          | 每参数字节数 |
-| ----------- | -----: |
-| FP32        |      4 |
-| FP16 / BF16 |      2 |
-| FP8         |      1 |
-| INT8        |      1 |
-| INT4        |    0.5 |
-
-### 6.3 说明
-
-1. 对于量化模型，理论权重显存通常较低，但实际部署中会因量化索引、group scale、kernel buffer 等产生额外开销；
-2. 因此不建议仅用裸权重显存作为 sizing 依据，应加上 `r_overhead`；
-3. 工程上，`r_overhead` 常可取 10%–20%。
-
----
-
-## 7. KV Cache 显存估算
-
-### 7.1 单请求 KV Cache 公式
-
-对于单请求，在总长度为 `S` 时，KV Cache 近似为：
-
-$$
-M_{kv,req} = \frac{2 \times L \times S \times H \times b_{kv} \times batch}{1024^3}
+TPS \approx \min(TPS_{compute},\ TPS_{memory},\ TPS_{scheduler})
 $$
 
 其中：
 
-* `2` 表示 K 与 V 两部分；
-* `L` 表示层数；
-* `S` 表示序列总长度；
-* `H` 表示隐藏维度；
-* `b_kv` 表示 KV 元素字节数；
-* `batch` 通常为 1。
+* (TPS_{compute})：算力约束上限
+* (TPS_{memory})：显存带宽约束上限
+* (TPS_{scheduler})：调度、并行、路由等系统约束上限
 
-### 7.2 含义说明
+在当前版本中，由于 GPU 侧不使用实测吞吐，吞吐估算统一采用：
 
-KV Cache 的主要特点是：
+* **decode：以显存带宽主导估算**
+* **prefill：以算力上界与带宽上界取最小值估算**
 
-1. 与模型参数量无直接线性关系，但与层数、隐藏维度相关；
-2. 与总序列长度 `S` 呈线性增长；
-3. 与并发数 `C` 呈线性增长；
-4. 在长上下文、高并发场景下，KV Cache 往往成为显存主导项。
+---
 
-### 7.3 并发总 KV Cache
+## 3. 输入参数
 
-若同时有 `C` 个活跃请求，则并发总 KV Cache 近似为：
+## 3.1 模型参数
+
+| 参数                           | 含义                             |
+| ---------------------------- | ------------------------------ |
+| `arch_family`                | Dense / MoE                    |
+| `attention_type`             | MHA / GQA / MQA / MLA / Sparse |
+| `total_params`               | 总参数量                           |
+| `activated_params_per_token` | 每 token 激活参数量，MoE 必填           |
+| `num_layers`                 | 层数                             |
+| `hidden_size`                | 隐藏维度                           |
+| `num_heads`                  | Query heads 数                  |
+| `num_kv_heads`               | KV heads 数，GQA/MQA 用           |
+| `head_dim`                   | 每个 attention head 维度           |
+| `latent_cache_dim`           | MLA 的 latent cache 维度          |
+| `weight_dtype_bytes`         | 权重精度字节数                        |
+| `cache_dtype_bytes`          | cache 精度字节数                    |
+| `activation_dtype_bytes`     | 激活精度字节数                        |
+
+---
+
+## 3.2 请求流量参数
+
+| 参数                         | 含义                   |
+| -------------------------- | -------------------- |
+| `concurrency`              | 同时活跃请求数              |
+| `target_decode_tps_total`  | 总 decode token/s 目标  |
+| `target_prefill_tps_total` | 总 prefill token/s 目标 |
+| `request_shapes`           | 请求长度分布               |
+
+建议 `request_shapes` 至少包含：
+
+* 请求类型名称
+* 流量占比
+* 平均输入长度
+* 平均输出长度
+
+---
+
+## 3.3 GPU 参数
+
+GPU 输入参数统一限定为：
+
+| 参数                      | 含义      |
+| ----------------------- | ------- |
+| `gpu_name`              | GPU 名称  |
+| `vram_gb`               | 显存容量    |
+| `memory_bandwidth_gbps` | 显存带宽    |
+| `fp32_tflops`           | FP32 算力 |
+| `fp16_tflops`           | FP16 算力 |
+| `bf16_tflops`           | BF16 算力 |
+| `fp8_tflops`            | FP8 算力  |
+| `int8_tflops`           | INT8 算力 |
+
+---
+
+## 3.4 高可用参数
+
+| 参数                       | 含义                                               |
+| ------------------------ | ------------------------------------------------ |
+| `ha_mode`                | none / n_plus_1 / active_standby / active_active |
+| `replica_count`          | 多活副本数                                            |
+| `failover_reserve_ratio` | 故障冗余比例                                           |
+| `zone_redundancy`        | 是否双机房 / 双可用区部署                                   |
+
+---
+
+## 4. 显存计算原理
+
+## 4.1 权重显存
+
+基础公式：
 
 $$
-M_{kv,total} = C \times M_{kv,req}
+M_{weights,raw}^{GiB} = \frac{total_params \times weight_dtype_bytes}{1024^3}
+$$
+
+若考虑量化元数据、附加模块、索引等额外开销：
+
+$$
+M_{weights} = M_{weights,raw}^{GiB} \times (1 + r_{weight})
+$$
+
+其中：
+
+* (r_{weight}) 建议取 **10%–20%**
+
+更通用写法：
+
+$$
+M_{weights} \approx \sum_i P_i \times b_i + M_{extra}
+$$
+
+其中：
+
+* (P_i)：第 (i) 类参数量
+* (b_i)：对应字节数
+* (M_{extra})：附加模块开销
+
+---
+
+## 4.2 Cache 显存统一公式
+
+为兼容不同架构，cache 统一写成：
+
+$$
+M_{cache} \approx num\_layers \times seq\_len \times batch \times E_{cache/token/layer}
+$$
+
+其中：
+
+* `seq_len = input_len + output_len`
+* (E_{cache/token/layer})：每层每 token 的真实缓存元素数 × 字节数
+
+---
+
+## 4.3 不同架构的 Cache 公式
+
+### 4.3.1 标准 MHA
+
+$$
+E_{cache/token/layer}^{MHA} \approx 2 \times num\_heads \times head\_dim \times cache\_dtype\_bytes
+$$
+
+$$
+M_{cache}^{MHA}
+\approx
+\frac{num\_layers \times seq\_len \times batch \times 2 \times num\_heads \times head\_dim \times cache\_dtype\_bytes}{1024^3}
+$$
+
+若：
+
+$$
+hidden\_size = num\_heads \times head\_dim
+$$
+
+可简化为：
+
+$$
+M_{cache}^{MHA}
+\approx
+\frac{2 \times num\_layers \times seq\_len \times hidden\_size \times batch \times cache\_dtype\_bytes}{1024^3}
 $$
 
 ---
 
-## 8. 输入/输出长度分布建模
+### 4.3.2 GQA
 
-## 8.1 引入长度分布的必要性
+$$
+E_{cache/token/layer}^{GQA} \approx 2 \times num\_kv\_heads \times head\_dim \times cache\_dtype\_bytes
+$$
 
-真实业务中，请求长度通常不是固定值，而是多类请求混合，例如：
+$$
+M_{cache}^{GQA}
+\approx
+\frac{2 \times num\_layers \times seq\_len \times num\_kv\_heads \times head\_dim \times batch \times cache\_dtype\_bytes}{1024^3}
+$$
 
-* 轻问答；
-* 中等分析；
-* 长上下文总结；
-* 复杂生成。
+---
 
-若统一按固定 `8192 + 512` 估算，会出现两个问题：
+### 4.3.3 MQA
 
-1. 若固定值过大，会高估成本；
-2. 若固定值过小，会低估峰值风险。
+$$
+E_{cache/token/layer}^{MQA} \approx 2 \times head\_dim \times cache\_dtype\_bytes
+$$
 
-因此需要使用长度分布进行估算。
+$$
+M_{cache}^{MQA}
+\approx
+\frac{2 \times num\_layers \times seq\_len \times head\_dim \times batch \times cache\_dtype\_bytes}{1024^3}
+$$
 
-### 8.2 分布定义
+---
 
-设共有 `K` 类请求，第 `i` 类请求占比为 `p_i`，满足：
+### 4.3.4 MLA
+
+$$
+E_{cache/token/layer}^{MLA}
+\approx
+latent\_cache\_dim \times cache\_dtype\_bytes + E_{aux}
+$$
+
+$$
+M_{cache}^{MLA}
+\approx
+\frac{num\_layers \times seq\_len \times batch \times (latent\_cache\_dim \times cache\_dtype\_bytes + E_{aux})}{1024^3}
+$$
+
+其中：
+
+* `latent_cache_dim` 为 latent cache 维度
+* (E_{aux}) 为附加状态开销
+
+---
+
+### 4.3.5 Sparse / Hybrid Attention
+
+稀疏注意力优先影响计算复杂度，不一定同比例降低缓存显存，因此：
+
+$$
+M_{cache}^{Sparse} = \text{按真实缓存结构计算}
+$$
+
+不建议简单按注意力稀疏比例折算显存。
+
+---
+
+## 4.4 运行时开销
+
+$$
+M_{runtime} = M_{workspace} + M_{system}
+$$
+
+其中：
+
+* (M_{workspace})：激活值、临时张量、workspace
+* (M_{system})：框架缓存池、显存碎片、通信缓冲、runtime 常驻开销
+
+工程上建议采用：
+
+### 固定值法
+
+$$
+M_{runtime} = 2 \sim 8 \text{ GiB}
+$$
+
+### 比例法
+
+$$
+M_{runtime} = r_{runtime} \times M_{weights}
+$$
+
+其中：
+
+* (r_{runtime}) 建议取 **5%–20%**
+
+更稳妥的写法：
+
+$$
+M_{runtime} = \max(M_{runtime,fixed},\ r_{runtime}\times M_{weights})
+$$
+
+---
+
+## 4.5 平均显存与 P95 显存
+
+### 平均场景
+
+$$
+M_{total}^{avg} = M_{weights} + concurrency \times M_{cache}(E[S]) + M_{runtime}
+$$
+
+### P95 场景
+
+设 P95 总长度为 (S_{p95})，则：
+
+$$
+M_{total}^{p95} = M_{weights} + concurrency \times M_{cache}(S_{p95}) + M_{runtime}
+$$
+
+采购 sizing 建议使用：
+
+$$
+M_{sizing} = M_{total}^{p95}
+$$
+
+---
+
+## 4.6 单卡可用显存与显存约束卡数
+
+$$
+M_{usable} = vram\_gb \times r_{usable}
+$$
+
+其中：
+
+* (r_{usable}) 建议取 **0.85–0.92**
+* 若需统一，可取 **0.90**
+
+显存约束下所需 GPU 数量：
+
+$$
+G_{memory} = \left\lceil \frac{M_{sizing}}{M_{usable}} \right\rceil
+$$
+
+---
+
+## 5. 请求长度分布计算
+
+设共有 (K) 类请求，第 (i) 类请求占比为 (p_i)，满足：
 
 $$
 \sum_{i=1}^{K} p_i = 1
 $$
 
-第 `i` 类请求平均输入长度为 `S_{in,i}`，平均输出长度为 `S_{out,i}`，则总长度为：
+总长度为：
 
 $$
 S_i = S_{in,i} + S_{out,i}
 $$
 
-### 8.3 平均输入、输出、总长度
+则：
 
-平均输入长度：
+### 平均输入长度
 
 $$
 E[S_{in}] = \sum_{i=1}^{K} p_i \cdot S_{in,i}
 $$
 
-平均输出长度：
+### 平均输出长度
 
 $$
 E[S_{out}] = \sum_{i=1}^{K} p_i \cdot S_{out,i}
 $$
 
-平均总长度：
+### 平均总长度
 
 $$
 E[S] = \sum_{i=1}^{K} p_i \cdot S_i
 $$
 
-### 8.4 平均单请求 KV Cache
+### P95 总长度
 
-将平均总长度代入 KV 公式：
-
-$$
-E[M_{kv,req}] = \frac{2 \times L \times E[S] \times H \times b_{kv} \times batch}{1024^3}
-$$
-
-### 8.5 P95 长度估算
-
-仅看平均值仍有低估峰值的风险，因此需引入高位分位近似。
-本文档采用简化版 P95 方法：
-
-1. 按各类请求的总长度 `S_i` 从小到大排序；
-2. 按流量占比做累计；
-3. 当累计概率首次达到或超过 95% 时，该类请求长度记为 `P95` 总长度。
-
-记为：
+将各请求按 (S_i) 从小到大排序，按占比累计，首次达到或超过 95% 时对应的长度记为：
 
 $$
 S_{p95}
 $$
 
-则 P95 单请求 KV Cache 为：
+---
 
-$$
-M_{kv,req}^{p95} = \frac{2 \times L \times S_{p95} \times H \times b_{kv} \times batch}{1024^3}
-$$
+## 6. 吞吐计算原理
+
+当前版本不使用 GPU 实测吞吐，而统一使用 **GPU 厂商规格参数推导值**。
 
 ---
 
-## 9. 总显存估算
+## 6.1 Decode 吞吐估算
 
-### 9.1 平均总显存
-
-平均场景下：
+decode 阶段通常更偏向显存带宽受限，因此建议写成：
 
 $$
-M_{total}^{avg} = M_{weight} + C \times E[M_{kv,req}] + M_{runtime}
+TPS_{decode}^{spec} = \min(TPS_{decode,compute},\ TPS_{decode,memory}) \times \eta_{decode}
 $$
 
-### 9.2 P95 总显存
-
-高位场景下：
+在简化口径下，优先采用带宽主导近似：
 
 $$
-M_{total}^{p95} = M_{weight} + C \times M_{kv,req}^{p95} + M_{runtime}
+TPS_{decode}^{spec}
+\approx
+\frac{memory\_bandwidth\_gbps \times 10^9 \times \eta_{decode}}{B_{decode/token}}
 $$
 
-### 9.3 为什么 sizing 更适合按 P95
+其中：
 
-采购与部署的目标不是“平均情况下能运行”，而是“高概率情况下不 OOM”。
+* (B_{decode/token})：每生成 1 个 token 的主要字节访问量
+* (\eta_{decode})：decode 折减系数
+
+建议折减系数：
+
+* 乐观：0.50–0.70
+* 中性：0.35–0.50
+* 保守：0.25–0.40
+
+若需显式引入算力上界，则：
+
+$$
+TPS_{decode,compute} = \frac{peak\_compute \times \eta_{compute}}{F_{decode/token}}
+$$
+
+其中 `peak_compute` 按模型主计算精度选择：
+
+* FP32：`fp32_tflops`
+* FP16：`fp16_tflops`
+* BF16：`bf16_tflops`
+* FP8：`fp8_tflops`
+* INT8：`int8_tflops`
+
+---
+
+## 6.2 Prefill 吞吐估算
+
+prefill 更接近整段输入的一次前向批量计算，因此建议采用：
+
+$$
+TPS_{prefill}^{spec} = \min(TPS_{prefill,compute},\ TPS_{prefill,memory}) \times \eta_{prefill}
+$$
+
+### 算力上界
+
+$$
+TPS_{prefill,compute} = \frac{peak\_compute \times \eta_{compute}}{F_{prefill/token}}
+$$
+
+其中 `peak_compute` 按实际主计算精度选择：
+
+* FP32：`fp32_tflops`
+* FP16：`fp16_tflops`
+* BF16：`bf16_tflops`
+* FP8：`fp8_tflops`
+* INT8：`int8_tflops`
+
+### 带宽上界
+
+$$
+TPS_{prefill,memory} = \frac{memory\_bandwidth\_gbps \times 10^9 \times \eta_{bw}}{B_{prefill/token}}
+$$
+
+### Prefill 折减系数建议
+
+* 乐观：0.65–0.80
+* 中性：0.45–0.65
+* 保守：0.30–0.45
+
+一般来说，prefill 的折减可略高于 decode。
+
+---
+
+## 6.3 Dense 与 MoE 在吞吐上的区别
+
+### Dense
+
+$$
+TPOT_{compute}^{Dense} \propto total\_params
+$$
+
+### MoE
+
+$$
+TPOT_{compute}^{MoE} \propto activated\_params\_per\_token
+$$
+
 因此：
 
-* 平均总显存更适合观察日常利用率；
-* P95 总显存更适合作为显存 sizing 基准。
+* **显存估算**：看总参数 / 总 checkpoint
+* **吞吐估算**：看激活参数量
 
-通常建议：
-
-$$
-M_{sizing} = M_{total}^{p95}
-$$
+两者不能混用。
 
 ---
 
-## 10. 单卡安全可用显存
+## 6.4 吞吐约束卡数
 
-GPU 标称显存不能视为 100% 可用。
-为避免显存碎片化、runtime buffer 波动、框架保留空间等问题，应设置安全可用比例。
-
-### 10.1 公式
+### Decode 约束
 
 $$
-M_{use} = M_{gpu} \times r_{use}
+G_{decode} = \left\lceil \frac{target\_decode\_tps\_total}{TPS_{decode}^{spec}} \right\rceil
 $$
 
-其中：
-
-* `M_gpu` 为单卡标称显存；
-* `r_use` 通常取 0.85–0.92。
-
-### 10.2 说明
-
-例如 48 GiB 显卡，若安全可用比例取 0.90，则：
+### Prefill 约束
 
 $$
-M_{use} = 48 \times 0.90 = 43.2 , GiB
-$$
-
-显存估算应使用 `43.2 GiB`，而不是 `48 GiB`。
-
----
-
-## 11. 按显存约束估算 GPU 数量
-
-显存约束下所需 GPU 数为：
-
-$$
-G_{mem} = \left\lceil \frac{M_{sizing}}{M_{use}} \right\rceil
-$$
-
-其中：
-
-* `M_sizing` 通常取 `P95 总显存`；
-* `M_use` 为单卡安全可用显存。
-
-该结果表示：**仅从“装得下”角度看，至少需要多少张卡。**
-
----
-
-## 12. 按吞吐约束估算 GPU 数量
-
-## 12.1 decode 吞吐约束
-
-若单卡实测 decode 吞吐为 `T_gpu`，业务总吞吐目标为 `T_total`，则：
-
-$$
-G_{decode} = \left\lceil \frac{T_{total}}{T_{gpu}} \right\rceil
-$$
-
-### 12.2 prefill 吞吐约束
-
-若单卡实测 prefill 吞吐为 `P_gpu`，业务总 prefill 吞吐目标为 `P_total`，则：
-
-$$
-G_{prefill} = \left\lceil \frac{P_{total}}{P_{gpu}} \right\rceil
-$$
-
-### 12.3 业务所需 GPU 数
-
-综合显存与吞吐约束：
-
-$$
-G_{biz} = \max(G_{mem}, G_{decode}, G_{prefill})
-$$
-
-其中若未给定某类吞吐参数，则对应项可忽略。
-
-该结果表示：**在不考虑高可用时，满足业务运行所需的最少 GPU 张数。**
-
----
-
-## 13. 理论 TPOT 与带宽上限估算
-
-## 13.1 目的
-
-理论 TPOT 用于辅助判断单卡吞吐是否合理，不直接替代实测值。
-
-### 13.2 近似公式
-
-在解码阶段，可将每生成一个 token 的过程近似看作“至少访问一遍主要权重”，则：
-
-$$
-Bytes_{per_token} \approx N \times b_w
-$$
-
-若 GPU 显存带宽为 `BW`，则理论每 token 时间可近似表示为：
-
-$$
-TPOT_{theory} = \frac{N \times b_w}{BW}
-$$
-
-换算为毫秒：
-
-$$
-TPOT_{ms} = \frac{N \times b_w}{BW} \times 1000
-$$
-
-理论吞吐上限为：
-
-$$
-TPS_{theory} = \frac{1000}{TPOT_{ms}}
-$$
-
-### 13.3 说明
-
-1. 该公式反映带宽上限，不代表实际可达值；
-2. 实际吞吐通常低于理论上限；
-3. 采购 sizing 应优先使用 `measured_decode_tps_per_gpu` 等实测值。
-
----
-
-## 14. 高可用估算
-
-在实际生产场景中，仅满足业务负载是不够的，还需考虑节点故障、单卡故障、服务切换和升级维护等场景。
-
-本文档将高可用估算分为以下模式。
-
----
-
-## 15. 高可用模式定义
-
-### 15.1 无高可用
-
-$$
-G_{total} = G_{biz}
-$$
-
-适用于：
-
-* 开发测试；
-* 概念验证；
-* 非关键业务。
-
----
-
-### 15.2 N+1 模式
-
-在业务最少张数基础上增加 1 张 GPU：
-
-$$
-G_{total} = G_{biz} + 1
-$$
-
-适用于：
-
-* 需要一定高可用；
-* 希望控制资源成本；
-* 小规模生产环境。
-
----
-
-### 15.3 主备模式
-
-主集群与备集群各自具备完整业务承载能力：
-
-$$
-G_{total} = 2 \times G_{biz}
-$$
-
-适用于：
-
-* 稳定性要求较高；
-* 接受备资源平时闲置；
-* 需要快速切换。
-
----
-
-### 15.4 多活模式
-
-若采用 `replica_count` 个副本，每个副本都具备独立承载能力，则：
-
-$$
-G_{total} = replica_count \times G_{biz}
-$$
-
-适用于：
-
-* 强调服务持续性；
-* 需要多副本对外服务；
-* 容忍较高资源成本。
-
----
-
-## 16. 故障冗余比例
-
-在基础高可用模式之外，还可以增加额外故障冗余比例 `r_failover`：
-
-$$
-G_{total}' = \left\lceil G_{total} \times (1 + r_{failover}) \right\rceil
-$$
-
-例如：
-
-* 基础总卡数为 5；
-* 故障冗余比例为 25%；
-
-则：
-
-$$
-G_{total}' = \lceil 5 \times 1.25 \rceil = 7
-$$
-
-该做法适合用于缓冲以下风险：
-
-* 单卡临时不可用；
-* 某台机器降频或维修；
-* 实际吞吐低于压测值；
-* 上下文分布出现阶段性偏移。
-
----
-
-## 17. 跨可用区或跨机房冗余
-
-若需要按双机房或双可用区做对等部署，可进一步乘以区域冗余因子。
-简化条件下，若要求双区对等：
-
-$$
-G_{final} = 2 \times G_{total}'
-$$
-
-此处为保守估算。
-若后续实施中采用共享调度或分区分流策略，可再做细化。
-
----
-
-## 18. 最终采购卡数计算
-
-综上，最终采购卡数可按以下顺序得到：
-
-### 步骤 1：计算显存 sizing 基准
-
-$$
-M_{sizing} = M_{total}^{p95}
-$$
-
-### 步骤 2：计算显存约束卡数
-
-$$
-G_{mem} = \left\lceil \frac{M_{sizing}}{M_{use}} \right\rceil
-$$
-
-### 步骤 3：计算吞吐约束卡数
-
-$$
-G_{decode} = \left\lceil \frac{T_{total}}{T_{gpu}} \right\rceil
-$$
-
-$$
-G_{prefill} = \left\lceil \frac{P_{total}}{P_{gpu}} \right\rceil
-$$
-
-### 步骤 4：计算业务最少卡数
-
-$$
-G_{biz} = \max(G_{mem}, G_{decode}, G_{prefill})
-$$
-
-### 步骤 5：叠加高可用
-
-按 `none / N+1 / 主备 / 多活` 之一得到：
-
-$$
-G_{ha}
-$$
-
-### 步骤 6：叠加故障冗余与跨区冗余
-
-$$
-G_{final} = f(G_{ha}, r_{failover}, zone\ redundancy)
-$$
-
----
-
-## 19. 工程解释
-
-### 19.1 为什么不能只看权重显存
-
-因为模型能加载不代表服务能运行。
-在长上下文和高并发场景下，KV Cache 往往比权重更快成为瓶颈。
-
-### 19.2 为什么不能只看平均长度
-
-因为线上系统的稳定性取决于高位负载，而不是平均负载。
-若只按平均值 sizing，极易在长请求集中出现 OOM。
-
-### 19.3 为什么吞吐与显存都要算
-
-因为两者约束不同：
-
-* 显存约束决定“能否装下”；
-* 吞吐约束决定“能否跑得足够快”。
-
-只满足其一，仍可能无法上线。
-
-### 19.4 为什么高可用不能最后随意加一点
-
-因为高可用不是简单“多买一张卡”的问题，而是与服务拓扑、切换策略、运维目标相关。
-因此应在容量规划阶段就纳入整体估算。
-
----
-
-## 20. 典型使用方法
-
-本文档推荐以下使用顺序：
-
-### 第一阶段：模型与精度选型
-
-先确定：
-
-* 模型参数量；
-* 量化方式；
-* KV Cache 精度。
-
-### 第二阶段：业务流量抽象
-
-将线上请求抽象为若干类请求，给出：
-
-* 占比；
-* 平均输入长度；
-* 平均输出长度。
-
-### 第三阶段：计算显存
-
-依次得到：
-
-* 权重显存；
-* 平均 / P95 KV Cache；
-* 平均 / P95 总显存。
-
-### 第四阶段：计算业务最少卡数
-
-综合：
-
-* 显存约束；
-* decode 吞吐约束；
-* prefill 吞吐约束。
-
-### 第五阶段：叠加高可用
-
-根据实际要求选择：
-
-* N+1；
-* 主备；
-* 双活；
-* 跨机房冗余。
-
----
-
-## 21. 方法边界与局限性
-
-本文方法为工程化容量估算模型，不等价于真实压测结果。
-以下因素可能导致偏差：
-
-1. 推理框架差异，如 vLLM、TensorRT-LLM、SGLang 等；
-2. continuous batching 策略差异；
-3. paged attention / prefix cache 命中情况；
-4. 多轮会话历史裁剪策略；
-5. 模型是否使用 GQA / MQA；
-6. GPU 互联方式差异；
-7. 实际请求长度分布随业务波动；
-8. 工具调用、RAG 检索、外部等待带来的请求驻留时间变化；
-9. 动态 batch 导致的吞吐和时延折中。
-
-因此本文方法适用于：
-
-* 方案前期 sizing；
-* 采购规模初估；
-* 方案比较；
-
-不应替代最终压测。
-
----
-
-## 22. 推荐实践
-
-### 22.1 对显存估算的建议
-
-* 权重显存必须加额外开销比例；
-* sizing 优先按 P95 总显存；
-* 单卡显存必须按安全可用值计算。
-
-### 22.2 对吞吐估算的建议
-
-* 单卡吞吐优先采用目标框架实测值；
-* 理论 TPOT 仅作校验，不作最终 sizing 依据；
-* decode 与 prefill 应分别考虑。
-
-### 22.3 对高可用设计的建议
-
-若只要求“一定高可用”，建议优先采用：
-
-* `N+1`；
-* 再加 20%–30% 故障冗余。
-
-这通常比主备或双活更平衡，兼顾稳定性与资源成本。
-
-### 22.4 对最终实施的建议
-
-推荐采用“两步法”：
-
-#### 第一步：理论估算
-
-按本文方法得到采购区间。
-
-#### 第二步：实测校准
-
-基于目标模型、目标框架、目标 GPU 进行压测，回填：
-
-* 单卡 decode 吞吐；
-* 单卡 prefill 吞吐；
-* 实际显存峰值。
-
-最终再修正采购数量。
-
----
-
-## 23. 结论
-
-本文建立了一套面向单模型推理场景的 GPU 资源估算方法。
-该方法以“权重显存 + KV Cache 显存 + 运行时开销”为显存主框架，以“显存约束 + 吞吐约束 + 高可用约束”为 GPU 张数决策主框架，并引入输入输出长度分布与 P95 机制，使估算更贴近真实业务。
-
-简化表达如下：
-
-### 显存总公式
-
-$$
-M_{total} \approx M_{weight} + M_{kv} + M_{runtime}
+G_{prefill} = \left\lceil \frac{target\_prefill\_tps\_total}{TPS_{prefill}^{spec}} \right\rceil
 $$
 
 ### 业务最少卡数
 
 $$
-G_{biz} = \max(G_{mem}, G_{decode}, G_{prefill})
+G_{biz} = \max(G_{memory},\ G_{decode},\ G_{prefill})
 $$
 
-### 最终采购卡数
+如果未定义 prefill 指标，可忽略该项。
+
+---
+
+## 7. 高可用计算
+
+默认按单模型高可用计算，不涉及多模型混部。
+
+### 无高可用
 
 $$
-G_{final} = \text{业务卡数} + \text{高可用冗余} + \text{故障冗余}
+G_{final} = G_{biz}
 $$
 
-该方法适合用于前期规划、方案比较和采购 sizing，并可与后续压测结果结合，形成更贴近真实系统的部署配置。
+### N+1
+
+$$
+G_{final} = G_{biz} + 1
+$$
+
+### 主备
+
+$$
+G_{final} = 2 \times G_{biz}
+$$
+
+### 多活
+
+若副本数为 `replica_count`：
+
+$$
+G_{final} = replica\_count \times G_{biz}
+$$
+
+### 故障冗余
+
+$$
+G_{final}' = \left\lceil G_{final} \times (1 + failover\_reserve\_ratio) \right\rceil
+$$
+
+### 双机房 / 双可用区
+
+$$
+G_{final}^{zone} = 2 \times G_{final}'
+$$
+
+---
+
+## 8. 统一计算流程
+
+### 第 1 步：识别模型架构
+
+确定：
+
+* Dense / MoE
+* MHA / GQA / MQA / MLA / Sparse
+* 权重精度、cache 精度、激活精度
+
+### 第 2 步：建立请求长度分布
+
+得到：
+
+* 平均输入长度
+* 平均输出长度
+* P95 总长度
+
+### 第 3 步：计算权重显存
+
+$$
+M_{weights}
+$$
+
+### 第 4 步：按架构计算 cache 显存
+
+$$
+M_{cache}
+$$
+
+### 第 5 步：加入运行时开销
+
+得到：
+
+$$
+M_{total}^{avg},\quad M_{total}^{p95}
+$$
+
+### 第 6 步：计算显存约束卡数
+
+$$
+G_{memory}
+$$
+
+### 第 7 步：根据 GPU 厂商规格推导 decode / prefill 吞吐
+
+得到：
+
+$$
+TPS_{decode}^{spec},\quad TPS_{prefill}^{spec}
+$$
+
+### 第 8 步：计算吞吐约束卡数
+
+$$
+G_{decode},\quad G_{prefill}
+$$
+
+### 第 9 步：得到业务最少卡数
+
+$$
+G_{biz} = \max(G_{memory}, G_{decode}, G_{prefill})
+$$
+
+### 第 10 步：叠加高可用
+
+得到：
+
+$$
+G_{final}
+$$
+
+---
+
+## 9. 核心结论
+
+本方法的核心不是为某一个模型写固定公式，而是建立统一框架：
+
+### 显存统一公式
+
+$$
+M_{total} \approx M_{weights} + M_{cache} + M_{runtime}
+$$
+
+### Cache 统一公式
+
+$$
+M_{cache} \approx num\_layers \times seq\_len \times batch \times E_{cache/token/layer}
+$$
+
+### 吞吐统一公式
+
+$$
+TPS \approx \min(TPS_{compute},\ TPS_{memory}) \times \eta
+$$
+
+### 业务最少卡数
+
+$$
+G_{biz} = \max(G_{memory},\ G_{decode},\ G_{prefill})
+$$
+
+### 最终卡数
+
+$$
+G_{final} = G_{biz} + G_{HA}
+$$
+
+其中需要根据架构替换的核心量只有：
+
+* `E_cache/token/layer`
+* `activated_params_per_token`
+* `peak_compute` 的选择
+* `runtime` 的预留方式
+
+---
+
+## 10. 适用性说明
+
+这套计算原理适合：
+
+* 前期方案设计
+* GPU 卡型筛选
+* 采购数量初估
+* 不同架构模型统一估算
+* 基于 GPU 厂商规格参数进行前期估算
