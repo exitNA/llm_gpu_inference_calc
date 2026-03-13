@@ -1,0 +1,10 @@
+{
+    "gpu_name": "NVIDIA H200 SXM 141GB",
+    "vram_gb": 141,
+    "memory_bandwidth_gbps": 4800,
+    "fp32_tflops": 67.0,
+    "fp16_tflops": 1979.0,
+    "bf16_tflops": 1979.0,
+    "fp8_tflops": 3958.0,
+    "int8_tflops": 3958.0
+}
