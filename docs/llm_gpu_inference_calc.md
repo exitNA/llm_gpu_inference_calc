@@ -278,7 +278,7 @@ $$
 
 这两个量随后会分别进入后续的 `G_prefill` 和 `G_decode` 计算，最终与显存约束一起决定 GPU 数量。
 
-> ⚠️ **工程实现提示**：在计算引擎的底层（如 `gpu_sizing.py`）严格支持上述 TTFT 公式直接映射 `target_prefill_tps_total`。但在展示用的 UI（`gradio_app.py` / `presets.py`）中，为了降低用户的输入门槛，目前预设了简单的线性代理公式（如 `concurrency * 500` 作为总 prefill TPS），用户在 UI 上调整 Token 数仅影响显存（即 $M_{sizing}$）而不影响 TPS 系统要求。未来架构可按需开放真正的公式化输入。
+> ⚠️ **工程实现提示**：`gpu_sizing.py` 和当前 UI 都支持显式输入 `target_prefill_tps_total` / `target_decode_tps_total`。Gradio 页面仍会基于预设画像给出默认值（例如 `concurrency * 500` 作为默认总 prefill TPS），但这两个值现在可以直接手动覆盖。与此同时，请求画像中的 Token 分布调整仍主要影响显存估算（即 $M_{sizing}$）；如果你的业务吞吐目标随画像变化，需要同步修改这两个 TPS 参数。
 
 ---
 

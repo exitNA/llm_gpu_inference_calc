@@ -16,6 +16,7 @@ from presets import (
     DEFAULT_CONCURRENCY,
     DEFAULT_GPU_PRESET_KEY,
     TRAFFIC_PROFILE,
+    build_default_traffic_targets,
     get_default_gpu_key,
     get_default_model_key,
     get_gpu_choices,
@@ -51,11 +52,16 @@ _DEFAULT_SHAPES = TRAFFIC_PROFILE.request_shapes
 
 
 def default_component_values() -> tuple[Any, ...]:
+    default_prefill_tps_total, default_decode_tps_total = build_default_traffic_targets(
+        DEFAULT_CONCURRENCY,
+    )
     return (
         get_default_model_key(),
         "bf16",  # Default precision
         get_default_gpu_key(),
         DEFAULT_CONCURRENCY,
+        default_prefill_tps_total,
+        default_decode_tps_total,
         "不启用",
         0,
         25,
@@ -101,6 +107,8 @@ def ensure_non_negative(value: float, field_name: str) -> None:
 
 def _build_traffic_config_from_inputs(
     concurrency: int,
+    target_prefill_tps_total: float,
+    target_decode_tps_total: float,
     shape_ratios: list[float],
     shape_inputs: list[int],
     shape_outputs: list[int],
@@ -118,9 +126,9 @@ def _build_traffic_config_from_inputs(
         )
     return TrafficConfig(
         concurrency=concurrency,
-        target_decode_tps_total=concurrency * TRAFFIC_PROFILE.decode_tps_per_concurrency,
+        target_decode_tps_total=target_decode_tps_total,
         batch_size_per_request=TRAFFIC_PROFILE.batch_size_per_request,
-        target_prefill_tps_total=concurrency * TRAFFIC_PROFILE.prefill_tps_per_concurrency,
+        target_prefill_tps_total=target_prefill_tps_total,
         request_shapes=shapes,
     )
 
@@ -130,6 +138,8 @@ def build_configs(
     precision_override: Any,
     gpu_preset_key: Any,
     concurrency: Any,
+    target_prefill_tps_total: Any,
+    target_decode_tps_total: Any,
     ha_mode: Any,
     replica_count: Any,
     failover_reserve_ratio: Any,
@@ -141,6 +151,8 @@ def build_configs(
     *shape_values: Any,
 ):
     concurrency_value = to_int(concurrency, "并发量")
+    target_prefill_tps_total_value = to_float(target_prefill_tps_total, "目标 Prefill TPS")
+    target_decode_tps_total_value = to_float(target_decode_tps_total, "目标 Decode TPS")
     
     ha_mode_val = HA_MODE_LABELS.get(str(ha_mode), "none")
     if ha_mode_val == "none":
@@ -157,6 +169,8 @@ def build_configs(
     u_vram_ratio_val = to_float(usable_vram_ratio, "安全可用显存比例") / 100.0
 
     ensure_positive(concurrency_value, "并发量")
+    ensure_positive(target_prefill_tps_total_value, "目标 Prefill TPS")
+    ensure_positive(target_decode_tps_total_value, "目标 Decode TPS")
     ensure_non_negative(failover_ratio, "故障冗余比例")
     ensure_non_negative(w_overhead_ratio_val, "模型参数额外开销")
     ensure_non_negative(rt_overhead_ratio_val, "运行时显存占比")
@@ -198,7 +212,12 @@ def build_configs(
         shape_outputs = [s.avg_output_tokens for s in _DEFAULT_SHAPES]
 
     traffic = _build_traffic_config_from_inputs(
-        concurrency_value, shape_ratios, shape_inputs, shape_outputs,
+        concurrency_value,
+        target_prefill_tps_total_value,
+        target_decode_tps_total_value,
+        shape_ratios,
+        shape_inputs,
+        shape_outputs,
     )
     ha = HAConfig(
         ha_mode=ha_mode_val,
@@ -263,6 +282,8 @@ def import_gradio():
         import gradio as gr
     except ModuleNotFoundError as exc:
         raise RuntimeError("未安装 gradio，请先执行 `uv sync`。") from exc
+    if not hasattr(gr, "Blocks"):
+        raise RuntimeError("当前环境中的 gradio 不可用，请先执行 `uv sync` 安装完整依赖。")
     return gr
 
 
@@ -292,6 +313,33 @@ def update_precision_choices(gpu_preset_key: str, current_precision: str):
 def gradio_dropdown_update(choices: list[tuple[str, str]], value: str):
     gr = import_gradio()
     return gr.Dropdown(choices=choices, value=value)
+
+
+def build_config_panel_intro_html() -> str:
+    return """
+    <div class="config-panel-hero">
+      <p class="config-panel-eyebrow">Control Panel</p>
+      <div class="config-panel-title-row">
+        <h2>参数配置</h2>
+        <span class="config-panel-status">实时计算</span>
+      </div>
+      <p class="config-panel-copy">调整左侧参数，右侧结果会自动更新。</p>
+    </div>
+    """
+
+
+def build_config_section_header_html(icon: str, title: str, description: str) -> str:
+    return f"""
+    <div class="config-section-header">
+      <div class="config-section-title-row">
+        <span class="config-section-icon">{escape(icon)}</span>
+        <div>
+          <div class="config-section-title">{escape(title)}</div>
+          <div class="config-section-description">{escape(description)}</div>
+        </div>
+      </div>
+    </div>
+    """
 
 
 def reset_all():
@@ -326,122 +374,149 @@ def build_app():
         blocks = gr.Blocks(title=APP_TITLE, theme=build_theme(gr), css=APP_CSS)
 
     with blocks as demo:
-        with gr.Row():
+        with gr.Row(elem_classes=["workspace-main"]):
             # ── Left: Configuration Panel ──
-            with gr.Column(scale=3, min_width=320):
+            with gr.Column(scale=4, min_width=420, elem_classes=["workspace-sidebar"]):
                 with gr.Group(elem_classes=["config-panel"]):
-                    gr.Markdown("### 🧠 模型配置")
-                    model_dropdown = gr.Dropdown(
-                        label="选择模型",
-                        choices=get_model_choices(),
-                        value=default_values[0],
-                    )
-                    weight_overhead_ratio = gr.Slider(
-                        minimum=0, maximum=100, step=1,
-                        label="权重冗余 (%)",
-                        value=default_values[8],
-                        info="模型加载时权重膨胀的预留空间",
-                        elem_classes=["compact-slider"],
-                    )
-                    runtime_overhead_ratio = gr.Slider(
-                        minimum=0, maximum=100, step=1,
-                        label="运行时开销 (%)",
-                        value=default_values[9],
-                        info="激活值和 CUDA 上下文占权重的比例",
-                        elem_classes=["compact-slider"],
-                    )
-                    runtime_overhead_gb = gr.Slider(
-                        minimum=0, maximum=10, step=1,
-                        label="运行时保底 (GB)",
-                        value=default_values[10],
-                        info="最低保障的运行时开销绝对值",
-                        elem_classes=["compact-slider"],
-                    )
+                    gr.HTML(build_config_panel_intro_html())
 
-                    gr.Markdown("### 🖥️ 显卡配置")
-                    gpu_preset_key = gr.Dropdown(
-                        label="选择显卡",
-                        choices=get_gpu_choices(),
-                        value=default_values[2],
-                    )
-                    precision_dropdown = gr.Radio(
-                        label="推理精度",
-                        choices=["fp8", "fp16", "bf16"],
-                        value=default_values[1],
-                        elem_classes=["compact-radio"],
-                    )
-                    usable_vram_ratio = gr.Slider(
-                        minimum=50, maximum=100, step=1,
-                        label="安全水位线 (%)",
-                        value=default_values[11],
-                        info="避免 OOM 的显存水位线上限",
-                        elem_classes=["compact-slider"],
-                    )
+                    with gr.Group(elem_classes=["config-section", "config-section-model"]):
+                        gr.HTML(build_config_section_header_html("🧠", "模型配置", "模型选择与运行时冗余预算"))
+                        model_dropdown = gr.Dropdown(
+                            label="选择模型",
+                            choices=get_model_choices(),
+                            value=default_values[0],
+                        )
+                        with gr.Group(elem_classes=["config-slider-stack"]):
+                            weight_overhead_ratio = gr.Slider(
+                                minimum=0, maximum=100, step=1,
+                                label="权重冗余 (%)",
+                                value=default_values[10],
+                                info="模型加载时权重膨胀的预留空间",
+                                elem_classes=["compact-slider"],
+                            )
+                            runtime_overhead_ratio = gr.Slider(
+                                minimum=0, maximum=100, step=1,
+                                label="运行时开销 (%)",
+                                value=default_values[11],
+                                info="激活值和 CUDA 上下文占权重的比例",
+                                elem_classes=["compact-slider"],
+                            )
+                            runtime_overhead_gb = gr.Slider(
+                                minimum=0, maximum=10, step=1,
+                                label="运行时保底 (GB)",
+                                value=default_values[12],
+                                info="最低保障的运行时开销绝对值",
+                                elem_classes=["compact-slider"],
+                            )
 
-                    gr.Markdown("### 🚦 流量并发")
-                    concurrency = gr.Number(
-                        label="并发量",
-                        value=default_values[3],
-                        precision=0,
-                    )
-                    use_p95_for_memory_sizing = gr.Checkbox(
-                        label="显存 sizing 使用 P95 序列长度",
-                        value=default_values[7],
-                        info="预留 95% 请求不 OOM 的极限长度显存（更稳定），不勾选则按平均长度预算（更激进、省卡但易崩小部分请求）",
-                    )
+                    with gr.Group(elem_classes=["config-section", "config-section-gpu"]):
+                        gr.HTML(build_config_section_header_html("🖥️", "显卡配置", "GPU 规格、精度与安全水位线"))
+                        gpu_preset_key = gr.Dropdown(
+                            label="选择显卡",
+                            choices=get_gpu_choices(),
+                            value=default_values[2],
+                        )
+                        precision_dropdown = gr.Radio(
+                            label="推理精度",
+                            choices=["fp8", "fp16", "bf16"],
+                            value=default_values[1],
+                            elem_classes=["compact-radio"],
+                        )
+                        usable_vram_ratio = gr.Slider(
+                            minimum=50, maximum=100, step=1,
+                            label="安全水位线 (%)",
+                            value=default_values[13],
+                            info="避免 OOM 的显存水位线上限",
+                            elem_classes=["compact-slider"],
+                        )
 
-                    with gr.Accordion("📊 业务请求画像", open=False, elem_classes=["custom-accordion"]):
-                        gr.HTML(build_traffic_profile_header_html())
-                        shape_components: list = []
-                        for idx, s in enumerate(_DEFAULT_SHAPES):
-                            sv_offset = idx * 3
-                            gr.HTML(build_shape_name_html(s.name))
-                            with gr.Row():
-                                ratio_input = gr.Number(
-                                    label="占比",
-                                    value=shape_vals[sv_offset],
+                    with gr.Group(elem_classes=["config-section", "config-section-traffic"]):
+                        gr.HTML(build_config_section_header_html("🚦", "流量配置", "并发与集群吞吐目标"))
+                        with gr.Row(elem_classes=["config-field-grid"]):
+                            with gr.Column(min_width=96):
+                                concurrency = gr.Number(
+                                    label="并发量",
+                                    value=default_values[3],
+                                    precision=0,
+                                )
+                            with gr.Column(min_width=144):
+                                target_prefill_tps_total = gr.Number(
+                                    label="Prefill TPS",
+                                    value=default_values[4],
                                     precision=2,
-                                    minimum=0.0,
-                                    maximum=1.0,
+                                    info="系统总 prefill 吞吐目标（tok/s）",
                                 )
-                                input_tokens = gr.Number(
-                                    label="输入 tokens",
-                                    value=shape_vals[sv_offset + 1],
-                                    precision=0,
+                            with gr.Column(min_width=144):
+                                target_decode_tps_total = gr.Number(
+                                    label="Decode TPS",
+                                    value=default_values[5],
+                                    precision=2,
+                                    info="系统总 decode 吞吐目标（tok/s）",
                                 )
-                                output_tokens = gr.Number(
-                                    label="输出 tokens",
-                                    value=shape_vals[sv_offset + 2],
-                                    precision=0,
-                                )
-                            shape_components.extend([ratio_input, input_tokens, output_tokens])
+                        use_p95_for_memory_sizing = gr.Checkbox(
+                            label="显存 sizing 使用 P95 序列长度",
+                            value=default_values[9],
+                            info="预留 95% 请求不 OOM 的极限长度显存；不勾选则按平均长度预算",
+                            elem_classes=["config-toggle"],
+                        )
 
-                    gr.Markdown("### 🛡️ 高可用")
-                    ha_mode = gr.Dropdown(
-                        label="HA 模式",
-                        choices=HA_MODE_CHOICES,
-                        value=default_values[4],
-                    )
-                    replica_count = gr.Number(
-                        label="副本数",
-                        value=default_values[5],
-                        precision=0,
-                        visible=(default_values[4] != "不启用"),
-                    )
-                    failover_reserve_ratio = gr.Slider(
-                        minimum=0, maximum=100, step=1,
-                        label="故障冗余比例 (%)",
-                        value=default_values[6],
-                        info="计划外故障时预留的额外容量占比",
-                        visible=(default_values[4] != "不启用"),
-                        elem_classes=["compact-slider"],
-                    )
+                        with gr.Accordion("业务请求画像", open=False, elem_classes=["custom-accordion", "profile-accordion"]):
+                            gr.HTML(build_traffic_profile_header_html())
+                            shape_components: list = []
+                            for idx, s in enumerate(_DEFAULT_SHAPES):
+                                sv_offset = idx * 3
+                                gr.HTML(build_shape_name_html(s.name))
+                                with gr.Row(elem_classes=["shape-grid"]):
+                                    ratio_input = gr.Number(
+                                        label="占比",
+                                        value=shape_vals[sv_offset],
+                                        precision=2,
+                                        minimum=0.0,
+                                        maximum=1.0,
+                                    )
+                                    input_tokens = gr.Number(
+                                        label="输入 tokens",
+                                        value=shape_vals[sv_offset + 1],
+                                        precision=0,
+                                    )
+                                    output_tokens = gr.Number(
+                                        label="输出 tokens",
+                                        value=shape_vals[sv_offset + 2],
+                                        precision=0,
+                                    )
+                                shape_components.extend([ratio_input, input_tokens, output_tokens])
 
-                    with gr.Row(elem_classes="button-row"):
+                    with gr.Group(elem_classes=["config-section", "config-section-ha"]):
+                        gr.HTML(build_config_section_header_html("🛡️", "高可用", "副本策略与故障冗余"))
+                        ha_mode = gr.Dropdown(
+                            label="HA 模式",
+                            choices=HA_MODE_CHOICES,
+                            value=default_values[6],
+                        )
+                        with gr.Row(elem_classes=["config-ha-grid"]):
+                            with gr.Column(min_width=110):
+                                replica_count = gr.Number(
+                                    label="副本数",
+                                    value=default_values[7],
+                                    precision=0,
+                                    visible=(default_values[6] != "不启用"),
+                                )
+                            with gr.Column(min_width=200):
+                                failover_reserve_ratio = gr.Slider(
+                                    minimum=0, maximum=100, step=1,
+                                    label="故障冗余比例 (%)",
+                                    value=default_values[8],
+                                    info="计划外故障时预留的额外容量占比",
+                                    visible=(default_values[6] != "不启用"),
+                                    elem_classes=["compact-slider"],
+                                )
+
+                    with gr.Row(elem_classes=["button-row"]):
                         reset_button = gr.Button("恢复默认", variant="secondary")
 
             # ── Right: Four-Step Narrative ──
-            with gr.Column(scale=7, min_width=640):
+            with gr.Column(scale=8, min_width=860, elem_classes=["workspace-content"]):
                 # Step 0: Overview / Conclusion Hero
                 overview_html = gr.HTML(value=build_overview_html(default_result))
                 # Step 1: Memory Analysis
@@ -478,6 +553,8 @@ def build_app():
             precision_dropdown,
             gpu_preset_key,
             concurrency,
+            target_prefill_tps_total,
+            target_decode_tps_total,
             ha_mode,
             replica_count,
             failover_reserve_ratio,
@@ -530,7 +607,8 @@ def build_app():
         # ── Auto-calculate: wire .change() on every input ──
         auto_calc_inputs = [
             model_dropdown, precision_dropdown, gpu_preset_key,
-            concurrency, ha_mode, replica_count, failover_reserve_ratio,
+            concurrency, target_prefill_tps_total, target_decode_tps_total,
+            ha_mode, replica_count, failover_reserve_ratio,
             use_p95_for_memory_sizing, weight_overhead_ratio,
             runtime_overhead_ratio, runtime_overhead_gb, usable_vram_ratio,
         ] + shape_components
@@ -547,6 +625,8 @@ def build_app():
             precision_dropdown,
             gpu_preset_key,
             concurrency,
+            target_prefill_tps_total,
+            target_decode_tps_total,
             ha_mode,
             replica_count,
             failover_reserve_ratio,

@@ -26,6 +26,12 @@ def format_metric_value(value: Any, suffix: str = "") -> str:
     return _fmt(value, suffix)
 
 
+def _fmt_tps_compact(value: Any) -> str:
+    if value is None:
+        return "-"
+    return f"{float(value):.0f}"
+
+
 # ── Helpers ──────────────────────────────────────────────────────────
 
 
@@ -107,6 +113,8 @@ def build_overview_html(result: dict[str, Any]) -> str:
     kv_dtype = escape(result["kv_cache_dtype"])
     model_name = escape(result["model_name"])
     concurrency = result["traffic_config"].concurrency
+    target_decode_tps = result["traffic_config"].target_decode_tps_total
+    target_prefill_tps = result["traffic_config"].prefill_tokens_per_sec_total
     params_b = result["model_config"].num_params_billion
     arch = escape(result.get("arch_family", ""))
     attn = escape(result.get("attention_type", ""))
@@ -127,6 +135,7 @@ def build_overview_html(result: dict[str, Any]) -> str:
             <span class="hero-chip">{prec} / {kv_dtype}</span>
             <span class="hero-chip">{sizing_basis} 策略</span>
             <span class="hero-chip">并发 {concurrency}</span>
+            <span class="hero-chip">速度 D {_fmt_tps_compact(target_decode_tps)} / P {_fmt_tps_compact(target_prefill_tps)} tok/s</span>
             {constraint_badges}
           </div>
         </div>
@@ -147,7 +156,7 @@ def build_overview_html(result: dict[str, Any]) -> str:
         <div class="context-card">
           <span class="context-label">网关并发</span>
           <span class="context-value">{concurrency} 请求</span>
-          <span class="context-meta">输入 {result['avg_input_tokens']:.0f} / 输出 {result['avg_output_tokens']:.0f} 词元</span>
+          <span class="context-meta">输入 {result['avg_input_tokens']:.0f} / 输出 {result['avg_output_tokens']:.0f} 词元 · D {_fmt_tps_compact(target_decode_tps)} / P {_fmt_tps_compact(target_prefill_tps)} tok/s</span>
         </div>
         <div class="context-card">
           <span class="context-label">高可用</span>

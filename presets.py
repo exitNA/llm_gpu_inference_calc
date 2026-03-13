@@ -54,6 +54,13 @@ DEFAULT_GPU_PRESET_KEY = "h200"
 DEFAULT_CONCURRENCY = 10
 
 
+def build_default_traffic_targets(concurrency: int) -> tuple[float, float]:
+    return (
+        concurrency * TRAFFIC_PROFILE.prefill_tps_per_concurrency,
+        concurrency * TRAFFIC_PROFILE.decode_tps_per_concurrency,
+    )
+
+
 def get_model_choices() -> list[tuple[str, str]]:
     """Return [(display_name, key), ...] for the model dropdown."""
     return [(preset.config.model_name, key) for key, preset in MODEL_PRESETS.items()]
@@ -79,10 +86,11 @@ def get_gpu_preset(preset_key: str) -> GPUPreset:
 
 
 def build_traffic_config(concurrency: int) -> TrafficConfig:
+    target_prefill_tps_total, target_decode_tps_total = build_default_traffic_targets(concurrency)
     return TrafficConfig(
         concurrency=concurrency,
-        target_decode_tps_total=concurrency * TRAFFIC_PROFILE.decode_tps_per_concurrency,
+        target_decode_tps_total=target_decode_tps_total,
         batch_size_per_request=TRAFFIC_PROFILE.batch_size_per_request,
-        target_prefill_tps_total=concurrency * TRAFFIC_PROFILE.prefill_tps_per_concurrency,
+        target_prefill_tps_total=target_prefill_tps_total,
         request_shapes=list(TRAFFIC_PROFILE.request_shapes),
     )
