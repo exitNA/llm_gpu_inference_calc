@@ -1,0 +1,4 @@
+interface:
+  display_name: "Python 代码规范"
+  short_description: "本仓库 Python 计算脚本的类型、异常、函数职责与公式可读性规范"
+  default_prompt: "使用 $server-code-style 编写或重构本仓库的 Python 计算脚本；保持类型完整、函数职责单一、公式与单位清晰，并按共享质量门禁执行最小验证。"

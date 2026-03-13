@@ -1,0 +1,4 @@
+interface:
+  display_name: "代码与文档评审"
+  short_description: "审查公式、实现和文档是否一致，并按严重级别输出风险"
+  default_prompt: "使用 $code-review 对本次改动做审查，优先输出按严重级别排序的 findings，重点覆盖公式正确性、代码与文档一致性、边界条件和验证缺口。"

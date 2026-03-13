@@ -1,0 +1,4 @@
+interface:
+  display_name: "Python 计算开发"
+  short_description: "GPU sizing 公式、参数定义、代码与文档同步更新流程"
+  default_prompt: "使用 $server-dev 修改本仓库的 Python 计算逻辑或 sizing 文档：先确认假设与单位，再同步更新 main.py 和 docs，清理过期公式、参数说明与示例，并执行最小验证。"

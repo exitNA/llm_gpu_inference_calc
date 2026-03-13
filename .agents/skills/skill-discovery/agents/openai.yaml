@@ -1,0 +1,6 @@
+interface:
+  display_name: "技能自动沉淀"
+  short_description: "自动识别通用约束并优先更新现有 skills，顺带删除过期内容"
+  default_prompt: "使用 $skill-discovery 识别这次需求里的稳定规则，优先更新已有技能并删除过期或重复内容，必要时再创建新 skill。"
+policy:
+  allow_implicit_invocation: true

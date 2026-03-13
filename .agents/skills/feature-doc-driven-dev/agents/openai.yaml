@@ -1,0 +1,4 @@
+interface:
+  display_name: "文档驱动开发"
+  short_description: "先统一 sizing 文档与术语，再同步代码和示例"
+  default_prompt: "使用 $feature-doc-driven-dev 处理本仓库的方案文档或说明文档变更：先明确主文档和术语，再同步公式、参数表、示例和 main.py，实现后清理重复或过期内容。"
