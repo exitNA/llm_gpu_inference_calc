@@ -134,16 +134,16 @@ TTFT 主要受 prefill 能力影响。
 
 设：
 
-* 峰值并发为 (C_{peak})
-* P95 输入长度为 (S_{in,p95})
-* prefill 时间预算为 (T_{prefill_budget})
+* 峰值并发为 $C_{peak}$
+* P95 输入长度为 $S_{in,p95}$
+* prefill 时间预算为 $T_{prefill_budget}$
 
 则：
 
 $$
-target_prefill_tps_total
+target\_prefill\_tps\_total
 \approx
-\frac{C_{peak} \times S_{in,p95}}{T_{prefill_budget}}
+\frac{C_{peak} \times S_{in,p95}}{T_{prefill\_budget}}
 $$
 
 ---
@@ -151,21 +151,18 @@ $$
 ### 4.2 持续生成速度
 
 $$
-StreamingSpeed = \frac{N_{output_tokens}}{t_{last_token} - t_{first_token}}
+StreamingSpeed = \frac{N_{output\_tokens}}{t_{last\_token} - t_{first\_token}}
 $$
 
 设：
 
-* 活跃生成请求数为 (C_{decode})
-* 单请求最低生成速度为 (R_{decode})
+* 活跃生成请求数为 $C_{decode}$
+* 单请求最低生成速度为 $R_{decode}$
 
 则：
 
 $$
-target_decode_tps_total
-=======================
-
-C_{decode} \times R_{decode}
+target\_decode\_tps\_total = C_{decode} \times R_{decode}
 $$
 
 ---
@@ -173,7 +170,7 @@ $$
 ### 4.3 端到端时延校验
 
 $$
-Latency_{e2e} = t_{last_token} - t_{request}
+Latency_{e2e} = t_{last\_token} - t_{request}
 $$
 
 可近似校验为：
@@ -199,7 +196,7 @@ $$
 ### 5.2 权重显存
 
 $$
-M_{weights,raw}^{GiB} = \frac{total_params \times weight_dtype_bytes}{1024^3}
+M_{weights,raw}^{GiB} = \frac{total\_params \times weight\_dtype\_bytes}{1024^3}
 $$
 
 考虑附加开销：
@@ -219,13 +216,13 @@ $$
 ### 5.3 Cache 显存统一公式
 
 $$
-M_{cache} \approx num_layers \times seq_len \times batch \times E_{cache/token/layer}
+M_{cache} \approx num\_layers \times seq\_len \times batch \times E_{cache/token/layer}
 $$
 
 其中：
 
 $$
-seq_len = input_len + output_len
+seq\_len = input\_len + output\_len
 $$
 
 ---
@@ -235,19 +232,19 @@ $$
 #### MHA
 
 $$
-E_{cache/token/layer}^{MHA} \approx 2 \times num_heads \times head_dim \times cache_dtype_bytes
+E_{cache/token/layer}^{MHA} \approx 2 \times num\_heads \times head\_dim \times cache\_dtype\_bytes
 $$
 
 $$
 M_{cache}^{MHA}
 \approx
-\frac{num_layers \times seq_len \times batch \times 2 \times num_heads \times head_dim \times cache_dtype_bytes}{1024^3}
+\frac{num\_layers \times seq\_len \times batch \times 2 \times num\_heads \times head\_dim \times cache\_dtype\_bytes}{1024^3}
 $$
 
 若：
 
 $$
-hidden_size = num_heads \times head_dim
+hidden\_size = num\_heads \times head\_dim
 $$
 
 则可简化为：
@@ -255,31 +252,31 @@ $$
 $$
 M_{cache}^{MHA}
 \approx
-\frac{2 \times num_layers \times seq_len \times hidden_size \times batch \times cache_dtype_bytes}{1024^3}
+\frac{2 \times num\_layers \times seq\_len \times hidden\_size \times batch \times cache\_dtype\_bytes}{1024^3}
 $$
 
 #### GQA
 
 $$
-E_{cache/token/layer}^{GQA} \approx 2 \times num_kv_heads \times head_dim \times cache_dtype_bytes
+E_{cache/token/layer}^{GQA} \approx 2 \times num\_kv\_heads \times head\_dim \times cache\_dtype\_bytes
 $$
 
 $$
 M_{cache}^{GQA}
 \approx
-\frac{2 \times num_layers \times seq_len \times num_kv_heads \times head_dim \times batch \times cache_dtype_bytes}{1024^3}
+\frac{2 \times num\_layers \times seq\_len \times num\_kv\_heads \times head\_dim \times batch \times cache\_dtype\_bytes}{1024^3}
 $$
 
 #### MQA
 
 $$
-E_{cache/token/layer}^{MQA} \approx 2 \times head_dim \times cache_dtype_bytes
+E_{cache/token/layer}^{MQA} \approx 2 \times head\_dim \times cache\_dtype\_bytes
 $$
 
 $$
 M_{cache}^{MQA}
 \approx
-\frac{2 \times num_layers \times seq_len \times head_dim \times batch \times cache_dtype_bytes}{1024^3}
+\frac{2 \times num\_layers \times seq\_len \times head\_dim \times batch \times cache\_dtype\_bytes}{1024^3}
 $$
 
 #### MLA
@@ -287,13 +284,13 @@ $$
 $$
 E_{cache/token/layer}^{MLA}
 \approx
-latent_cache_dim \times cache_dtype_bytes + E_{aux}
+latent\_cache\_dim \times cache\_dtype\_bytes + E_{aux}
 $$
 
 $$
 M_{cache}^{MLA}
 \approx
-\frac{num_layers \times seq_len \times batch \times (latent_cache_dim \times cache_dtype_bytes + E_{aux})}{1024^3}
+\frac{num\_layers \times seq\_len \times batch \times (latent\_cache\_dim \times cache\_dtype\_bytes + E_{aux})}{1024^3}
 $$
 
 #### Sparse / Hybrid Attention
@@ -435,10 +432,7 @@ $$
 ### 7.1 Decode 吞吐
 
 $$
-TPS_{decode}^{spec}
-===================
-
-\min(TPS_{decode,compute},\ TPS_{decode,memory}) \times \eta_{decode}
+TPS_{decode}^{spec} = \min(TPS_{decode,compute},\ TPS_{decode,memory}) \times \eta_{decode}
 $$
 
 简化为带宽主导时：
@@ -446,13 +440,13 @@ $$
 $$
 TPS_{decode}^{spec}
 \approx
-\frac{memory_bandwidth_gbps \times 10^9 \times \eta_{decode}}{B_{decode/token}}
+\frac{memory\_bandwidth\_gbps \times 10^9 \times \eta_{decode}}{B_{decode/token}}
 $$
 
 其中：
 
-* (B_{decode/token})：每生成 1 个 token 的主要字节访问量
-* (\eta_{decode})：折减系数
+* $B_{decode/token}$：每生成 1 个 token 的主要字节访问量
+* $\eta_{decode}$：折减系数
 
 建议：
 
@@ -463,10 +457,7 @@ $$
 若需要算力上界：
 
 $$
-TPS_{decode,compute}
-====================
-
-\frac{peak_compute \times \eta_{compute}}{F_{decode/token}}
+TPS_{decode,compute} = \frac{peak_compute \times \eta_{compute}}{F_{decode/token}}
 $$
 
 其中 `peak_compute` 按主计算精度选择：
@@ -482,28 +473,19 @@ $$
 ### 7.2 Prefill 吞吐
 
 $$
-TPS_{prefill}^{spec}
-====================
-
-\min(TPS_{prefill,compute},\ TPS_{prefill,memory}) \times \eta_{prefill}
+TPS_{prefill}^{spec} = \min(TPS_{prefill,compute},\ TPS_{prefill,memory}) \times \eta_{prefill}
 $$
 
 #### 算力上界
 
 $$
-TPS_{prefill,compute}
-=====================
-
-\frac{peak_compute \times \eta_{compute}}{F_{prefill/token}}
+TPS_{prefill,compute} = \frac{peak\_compute \times \eta_{compute}}{F_{prefill/token}}
 $$
 
 #### 带宽上界
 
 $$
-TPS_{prefill,memory}
-====================
-
-\frac{memory_bandwidth_gbps \times 10^9 \times \eta_{bw}}{B_{prefill/token}}
+TPS_{prefill,memory} = \frac{memory\_bandwidth\_gbps \times 10^9 \times \eta_{bw}}{B_{prefill/token}}
 $$
 
 其中 `peak_compute` 同样按主精度选择：
@@ -527,13 +509,13 @@ $$
 #### Dense
 
 $$
-TPOT_{compute}^{Dense} \propto total_params
+TPOT_{compute}^{Dense} \propto total\_params
 $$
 
 #### MoE
 
 $$
-TPOT_{compute}^{MoE} \propto activated_params_per_token
+TPOT_{compute}^{MoE} \propto activated\_params\_per\_token
 $$
 
 因此：
@@ -548,13 +530,13 @@ $$
 #### Decode 约束
 
 $$
-G_{decode} = \left\lceil \frac{target_decode_tps_total}{TPS_{decode}^{spec}} \right\rceil
+G_{decode} = \left\lceil \frac{target\_decode\_tps\_total}{TPS_{decode}^{spec}} \right\rceil
 $$
 
 #### Prefill 约束
 
 $$
-G_{prefill} = \left\lceil \frac{target_prefill_tps_total}{TPS_{prefill}^{spec}} \right\rceil
+G_{prefill} = \left\lceil \frac{target\_prefill\_tps\_total}{TPS_{prefill}^{spec}} \right\rceil
 $$
 
 #### 业务最少卡数
@@ -588,13 +570,13 @@ $$
 ### 多活
 
 $$
-G_{final} = replica_count \times G_{biz}
+G_{final} = replica\_count \times G_{biz}
 $$
 
 ### 故障冗余
 
 $$
-G_{final}' = \left\lceil G_{final} \times (1 + failover_reserve_ratio) \right\rceil
+G_{final}' = \left\lceil G_{final} \times (1 + failover\_reserve\_ratio) \right\rceil
 $$
 
 ### 双机房 / 双可用区
