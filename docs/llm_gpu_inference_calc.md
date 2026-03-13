@@ -15,6 +15,18 @@
 * MHA / GQA / MQA / MLA / Sparse
 * 基于 GPU 厂商规格参数进行前期估算
 
+整体链路如下：
+
+```mermaid
+flowchart LR
+    A[体验目标]
+    B[系统吞吐目标]
+    C[显存/吞吐计算]
+    D[GPU数量输出]
+
+    A --> B --> C --> D
+```
+
 ---
 
 ## 2. 总体计算链路
@@ -118,11 +130,22 @@
 | `ha_mode`                | none / n_plus_1 / active_standby / active_active |
 | `replica_count`          | 多活副本数                                            |
 | `failover_reserve_ratio` | 故障冗余比例                                           |
-| `zone_redundancy`        | 是否双机房 / 双可用区                                     |
 
 ---
 
 ## 4. 体验指标到系统指标的映射
+
+这一层的目标，是把用户能直接感知的体验指标，转换成系统容量规划可直接使用的 token/s 目标。
+
+可按两步理解：
+
+1. 先把体验目标拆成 prefill 阶段和 decode 阶段。
+2. 再分别换算成系统总吞吐目标 `target_prefill_tps_total` 与 `target_decode_tps_total`。
+
+其中：
+
+* `prefill` 处理输入 prompt，对应首 token 延迟 `TTFT`
+* `decode` 持续生成输出 token，对应流式生成速度 `Streaming Speed`
 
 ### 4.1 首 token 延迟
 
@@ -146,6 +169,20 @@ target\_prefill\_tps\_total
 \frac{C_{peak} \times S_{in,p95}}{T_{prefill\_budget}}
 $$
 
+含义是：
+
+* 在峰值时刻，系统需要同时完成约 `C_peak` 个请求的 prompt 处理
+* 每个请求按保守口径使用 `S_in,p95` 作为输入 token 规模
+* 这些 token 需要在 `T_prefill_budget` 时间内被处理完成
+
+因此：
+
+* 分子 `C_peak x S_in,p95` 表示高峰时刻需要处理的总输入 token 量
+* 分母 `T_prefill_budget` 表示允许系统完成这些 prefill 工作的时间预算
+* 两者相除后，得到系统需要具备的总 prefill 吞吐能力
+
+工程上通常可将 `T_prefill_budget` 视为 TTFT 预算中主要由 prefill 消耗的那部分时间，因此它通常不应大于 `target_ttft_p95_sec`。
+
 ---
 
 ### 4.2 持续生成速度
@@ -165,6 +202,18 @@ $$
 target\_decode\_tps\_total = C_{decode} \times R_{decode}
 $$
 
+含义是：
+
+* `C_decode` 不是总并发，而是同一时刻正在生成输出的活跃请求数
+* `R_decode` 是单请求最低生成速度，例如 `20 token/s`
+
+因此：
+
+* 如果同时有 `C_decode` 个请求都要满足最低生成速度
+* 系统总 decode 吞吐就至少要达到 `C_decode x R_decode`
+
+在容量规划里，`C_decode` 往往小于 `C_peak`，因为并不是所有活跃请求都同时处于 decode 阶段；如果没有更细的业务分阶段统计，可先用一个保守比例从峰值并发估算。
+
 ---
 
 ### 4.3 端到端时延校验
@@ -180,6 +229,36 @@ Latency_{e2e}
 \approx
 TTFT + \frac{S_{out}}{StreamingSpeed}
 $$
+
+也就是说，体验目标到系统吞吐目标的转换关系可以概括为：
+
+* `TTFT -> target_prefill_tps_total`
+* `Streaming Speed -> target_decode_tps_total`
+
+一个简单示例：
+
+* 峰值并发 `C_peak = 200`
+* P95 输入长度 `S_in,p95 = 4000`
+* prefill 时间预算 `T_prefill_budget = 2s`
+* 活跃生成请求数 `C_decode = 120`
+* 单请求最低生成速度 `R_decode = 20 token/s`
+
+则：
+
+$$
+target\_prefill\_tps\_total
+\approx
+\frac{200 \times 4000}{2}
+= 400000 \ token/s
+$$
+
+$$
+target\_decode\_tps\_total
+= 120 \times 20
+= 2400 \ token/s
+$$
+
+这两个量随后会分别进入后续的 `G_prefill` 和 `G_decode` 计算，最终与显存约束一起决定 GPU 数量。
 
 ---
 
@@ -579,12 +658,6 @@ $$
 G_{final}' = \left\lceil G_{final} \times (1 + failover\_reserve\_ratio) \right\rceil
 $$
 
-### 双机房 / 双可用区
-
-$$
-G_{final}^{zone} = 2 \times G_{final}'
-$$
-
 ---
 
 ## 9. 最终输出
@@ -606,20 +679,3 @@ $$
 $$
 G_{final} = G_{biz} + G_{HA}
 $$
-
----
-
-## 10. 一句话总结
-
-整条链路统一为：
-
-$$
-\text{体验目标} \rightarrow \text{系统吞吐目标} \rightarrow \text{显存/吞吐计算} \rightarrow \text{GPU数量输出}
-$$
-
-其中：
-
-* **TTFT 对应 prefill**
-* **流畅度对应 decode**
-* **prefill / decode token/s 是输入约束**
-* **GPU 数量与配置是最终输出**
