@@ -2,9 +2,9 @@
     "gpu_name": "NVIDIA H20 96GB",
     "vram_gb": 96,
     "memory_bandwidth_gbps": 4000,
-    "fp32_tflops": 44.0,
-    "fp16_tflops": 148.0,
-    "bf16_tflops": 148.0,
-    "fp8_tflops": null,
-    "int8_tflops": 296.0
+    "fp32_tflops": 44,
+    "fp16_tflops": 148,
+    "bf16_tflops": 148,
+    "fp8_tflops": 296,
+    "int8_tflops": 296
 }
