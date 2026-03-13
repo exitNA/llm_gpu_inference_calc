@@ -70,23 +70,23 @@ flowchart LR
 | ---------------------------- | ------------------------------ |
 | `arch_family`                | Dense / MoE                    |
 | `attention_type`             | MHA / GQA / MQA / MLA / Sparse |
-| `total_params`               | 总参数量                           |
-| `activated_params_per_token` | 每 token 激活参数量，MoE 使用           |
+| `total_params_b`             | 总参数量，单位 B                       |
+| `activated_params_per_token_b` | 每 token 激活参数量，单位 B，MoE 使用      |
 | `num_layers`                 | 层数                             |
 | `hidden_size`                | 隐藏维度                           |
 | `num_heads`                  | Query heads 数                  |
 | `num_kv_heads`               | KV heads 数                     |
 | `head_dim`                   | 每个 head 维度                     |
 | `latent_cache_dim`           | MLA latent cache 维度            |
-| `weight_dtype_bytes`         | 权重精度字节数                        |
-| `cache_dtype_bytes`          | cache 精度字节数                    |
-| `activation_dtype_bytes`     | 激活精度字节数                        |
+| `cache_aux_bytes_per_token_per_layer` | KV Cache 每个 token 的附加开销    |
+| `cache_bytes_per_token_per_layer` | 可直接指定单 token cache 大小，覆盖推导逻辑   |
 
 ### 3.2 请求参数
 
 | 参数                         | 含义                   |
 | -------------------------- | -------------------- |
 | `concurrency`              | 同时活跃请求数              |
+| `batch_size_per_request`   | 单个请求的 Batch Size，默认 1 |
 | `request_shapes`           | 请求长度分布               |
 | `target_prefill_tps_total` | 总 prefill token/s 目标 |
 | `target_decode_tps_total`  | 总 decode token/s 目标  |
@@ -115,13 +115,14 @@ flowchart LR
 | 参数                      | 含义      |
 | ----------------------- | ------- |
 | `gpu_name`              | GPU 名称  |
-| `vram_gb`               | 显存容量    |
-| `memory_bandwidth_gbps` | 显存带宽    |
+| `vram_gb`               | 显存容量，单位 GB |
+| `memory_bandwidth_gb_per_sec` | 显存带宽，单位 GB/s |
 | `fp32_tflops`           | FP32 算力 |
 | `fp16_tflops`           | FP16 算力 |
 | `bf16_tflops`           | BF16 算力 |
 | `fp8_tflops`            | FP8 算力  |
 | `int8_tflops`           | INT8 算力 |
+| `int4_tflops`           | INT4 算力 / W4A16 算力 |
 
 ### 3.5 高可用参数
 
@@ -130,6 +131,23 @@ flowchart LR
 | `ha_mode`                | none / n_plus_1 / active_standby / active_active |
 | `replica_count`          | 多活副本数                                            |
 | `failover_reserve_ratio` | 故障冗余比例                                           |
+
+### 3.6 运行时参数 (Runtime Config)
+
+这类参数**不属于**特定的 LLM 的模型结构或具体的一张显卡白皮书，这主要取决于你的推理引擎（如 vLLM/SGLang）、你选择的量化方案以及你的系统安全边际策略。虽然在当前 Python 的 `dataclasses` 里它们为了传参方便被存放在了模型或显卡的类下，但在规划时应作为独立的全局变量配置。
+
+| 参数 | 挂载对象 | 含义 |
+| :--- | :--- | :--- |
+| `inference_precision`        | 模型配置 | 推理精度；权重字节数与主算力口径由此决定 |
+| `kv_cache_dtype`             | 模型配置 | KV Cache 的数据存储格式 |
+| `weight_overhead_ratio`      | 模型配置 | 模型权重显存膨胀的冗余比例，默认 0.15 |
+| `runtime_overhead_ratio`     | 模型配置 | 运行时上下文等占模型的比例，默认 0.08 |
+| `runtime_overhead_gb`        | 模型配置 | 基础运行时保底显存绝对值，单位 GB，默认 2.0 |
+| `usable_vram_ratio`          | 显卡配置 | 防 OOM 的安全可用显存比例，默认 0.90 |
+| `decode_efficiency`          | 显卡配置 | Decode 阶段基于硬件规格打底的理论折减系数，默认 0.40 |
+| `prefill_efficiency`         | 显卡配置 | Prefill 阶段基于硬件规格打底的理论折减系数，默认 0.55 |
+| `compute_efficiency`         | 显卡配置 | 极限发热/功耗墙等导致的峰值算力折减系数，默认 0.60 |
+| `prefill_memory_reuse_factor`| 显卡配置 | Prefill 阶段批处理时显存带宽的虚拟读取放大倍率，默认 24.0 |
 
 ---
 
@@ -260,6 +278,8 @@ $$
 
 这两个量随后会分别进入后续的 `G_prefill` 和 `G_decode` 计算，最终与显存约束一起决定 GPU 数量。
 
+> ⚠️ **工程实现提示**：在计算引擎的底层（如 `gpu_sizing.py`）严格支持上述 TTFT 公式直接映射 `target_prefill_tps_total`。但在展示用的 UI（`gradio_app.py` / `presets.py`）中，为了降低用户的输入门槛，目前预设了简单的线性代理公式（如 `concurrency * 500` 作为总 prefill TPS），用户在 UI 上调整 Token 数仅影响显存（即 $M_{sizing}$）而不影响 TPS 系统要求。未来架构可按需开放真正的公式化输入。
+
 ---
 
 ## 5. 显存计算
@@ -275,13 +295,13 @@ $$
 ### 5.2 权重显存
 
 $$
-M_{weights,raw}^{GiB} = \frac{total\_params \times weight\_dtype\_bytes}{1024^3}
+M_{weights,raw}^{GB} = total\_params\_b \times bytes(inference\_precision)
 $$
 
 考虑附加开销：
 
 $$
-M_{weights} = M_{weights,raw}^{GiB} \times (1 + r_{weight})
+M_{weights} = M_{weights,raw}^{GB} \times (1 + r_{weight})
 $$
 
 其中：
@@ -317,7 +337,7 @@ $$
 $$
 M_{cache}^{MHA}
 \approx
-\frac{num\_layers \times seq\_len \times batch \times 2 \times num\_heads \times head\_dim \times cache\_dtype\_bytes}{1024^3}
+\frac{num\_layers \times seq\_len \times batch \times 2 \times num\_heads \times head\_dim \times cache\_dtype\_bytes}{10^9}
 $$
 
 若：
@@ -331,7 +351,7 @@ $$
 $$
 M_{cache}^{MHA}
 \approx
-\frac{2 \times num\_layers \times seq\_len \times hidden\_size \times batch \times cache\_dtype\_bytes}{1024^3}
+\frac{2 \times num\_layers \times seq\_len \times hidden\_size \times batch \times cache\_dtype\_bytes}{10^9}
 $$
 
 #### GQA
@@ -343,7 +363,7 @@ $$
 $$
 M_{cache}^{GQA}
 \approx
-\frac{2 \times num\_layers \times seq\_len \times num\_kv\_heads \times head\_dim \times batch \times cache\_dtype\_bytes}{1024^3}
+\frac{2 \times num\_layers \times seq\_len \times num\_kv\_heads \times head\_dim \times batch \times cache\_dtype\_bytes}{10^9}
 $$
 
 #### MQA
@@ -355,7 +375,7 @@ $$
 $$
 M_{cache}^{MQA}
 \approx
-\frac{2 \times num\_layers \times seq\_len \times head\_dim \times batch \times cache\_dtype\_bytes}{1024^3}
+\frac{2 \times num\_layers \times seq\_len \times head\_dim \times batch \times cache\_dtype\_bytes}{10^9}
 $$
 
 #### MLA
@@ -369,7 +389,7 @@ $$
 $$
 M_{cache}^{MLA}
 \approx
-\frac{num\_layers \times seq\_len \times batch \times (latent\_cache\_dim \times cache\_dtype\_bytes + E_{aux})}{1024^3}
+\frac{num\_layers \times seq\_len \times batch \times (latent\_cache\_dim \times cache\_dtype\_bytes + E_{aux})}{10^9}
 $$
 
 #### Sparse / Hybrid Attention
@@ -391,7 +411,7 @@ $$
 #### 固定值法
 
 $$
-M_{runtime} = 2 \sim 8\ \text{GiB}
+M_{runtime} = 2 \sim 8\ \text{GB}
 $$
 
 #### 比例法
@@ -439,7 +459,7 @@ $$
 ### 5.7 单卡可用显存与显存约束卡数
 
 $$
-M_{usable} = vram_gb \times r_{usable}
+M_{usable}^{GB} = vram\_gb \times r_{usable}
 $$
 
 其中：
@@ -519,7 +539,7 @@ $$
 $$
 TPS_{decode}^{spec}
 \approx
-\frac{memory\_bandwidth\_gbps \times 10^9 \times \eta_{decode}}{B_{decode/token}}
+\frac{memory\_bandwidth\_gb\_per\_sec \times 10^9 \times \eta_{decode}}{B_{decode/token}}
 $$
 
 其中：
@@ -546,6 +566,7 @@ $$
 * BF16：`bf16_tflops`
 * FP8：`fp8_tflops`
 * INT8：`int8_tflops`
+* INT4：若未显式提供 `int4_tflops`，可降级取 `int8_tflops`（当前代码约定的算力回退机制）。
 
 ---
 
@@ -564,7 +585,7 @@ $$
 #### 带宽上界
 
 $$
-TPS_{prefill,memory} = \frac{memory\_bandwidth\_gbps \times 10^9 \times \eta_{bw}}{B_{prefill/token}}
+TPS_{prefill,memory} = \frac{memory\_bandwidth\_gb\_per\_sec \times 10^9 \times \eta_{bw}}{B_{prefill/token}}
 $$
 
 其中 `peak_compute` 同样按主精度选择：
@@ -580,6 +601,9 @@ $$
 * 乐观：0.65–0.80
 * 中性：0.45–0.65
 * 保守：0.30–0.45
+
+> 💡 **访存带宽放大效应 (`prefill_memory_reuse_factor`)：**
+> 在 Prefill 阶段批处理处理大量 Prompt 个 Token 时（计算密集型场景），权重加载后能在多个 Token 之间充分复用（相比 Decode 只有一个 Token）。这会使得其显存带宽等效值急剧放大，计算受限而非访存受限成为常态。在计算引擎中，通常会在 $TPS_{decode,memory}$ 的基础上乘以一个极高的放大复用因子（如默认值 `24.0`）来推断 $TPS_{prefill,memory}$，突破显存带宽的物理限制。
 
 ---
 

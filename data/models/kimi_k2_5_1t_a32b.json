@@ -1,0 +1,13 @@
+{
+    "model_name": "Kimi-K2.5-1T-A32B",
+    "arch_family": "moe",
+    "attention_type": "mla",
+    "total_params_b": 1000,
+    "activated_params_per_token_b": 32,
+    "num_layers": 61,
+    "hidden_size": 7168,
+    "num_heads": 64,
+    "num_kv_heads": 64,
+    "head_dim": 128,
+    "latent_cache_dim": 512
+}

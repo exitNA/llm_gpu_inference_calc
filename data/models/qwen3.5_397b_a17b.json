@@ -2,14 +2,11 @@
     "model_name": "Qwen3.5-397B-A17B",
     "arch_family": "moe",
     "attention_type": "gqa",
-    "total_params": 397000000000,
-    "activated_params_per_token": 17000000000,
+    "total_params_b": 397,
+    "activated_params_per_token_b": 17,
     "num_layers": 60,
     "hidden_size": 4096,
     "num_heads": 32,
     "num_kv_heads": 2,
-    "head_dim": 128,
-    "weight_dtype_bytes": 2,
-    "cache_dtype_bytes": 2,
-    "activation_dtype_bytes": 2
+    "head_dim": 128
 }

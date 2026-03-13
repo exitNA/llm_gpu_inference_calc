@@ -2,15 +2,12 @@
   "model_name": "DeepSeek-R1-671B",
   "arch_family": "moe",
   "attention_type": "mla",
-  "total_params": 671000000000,
-  "activated_params_per_token": 37000000000,
+  "total_params_b": 671,
+  "activated_params_per_token_b": 37,
   "num_layers": 61,
   "hidden_size": 7168,
   "num_heads": 128,
   "num_kv_heads": 128,
   "head_dim": 56,
-  "latent_cache_dim": 512,
-  "weight_dtype_bytes": 2,
-  "cache_dtype_bytes": 2,
-  "activation_dtype_bytes": 2
+  "latent_cache_dim": 512
 }
