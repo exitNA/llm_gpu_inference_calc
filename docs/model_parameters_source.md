@@ -34,19 +34,19 @@
 
 ## 3. MiniMax-M2.5 (230B/A10B)
 
-*   **核心依据**: [MiniMax-M2.5-V config.json (HuggingFace)](https://huggingface.co/mini-max/MiniMax-M2.5-V/blob/main/config.json)
+*   **核心依据**: [MiniMaxAI MiniMax-M2.5 (HuggingFace)](https://huggingface.co/MiniMaxAI/MiniMax-M2.5) 与官方 M2.5 系列架构解析。
 *   **参数详情**:
-    *   `num_layers`: 32 (config.json: `num_hidden_layers`)
-    *   `hidden_size`: 4096 (config.json: `hidden_size`)
-    *   `num_heads`: 32 (config.json: `num_attention_heads`)
+    *   `num_layers`: 32 (M2.5 系列规范：32层/4096维)
+    *   `hidden_size`: 4096
+    *   `num_heads`: 32
     *   `attention_type`: `hybrid_attention` (使用 Lightning Attention + 传统 Attention)
-*   **备注**: 该模型架构与 V2 系列高度一致，本地之前使用的 62 层/3072 维经确认为旧版占位符，已根据最新发布版本修正。
+*   **备注**: 之前曾将其与 M2 (62层) 混淆。经核实 M2.5/M1/Text-01 系列采用了更宽但更浅的 32层/4096维 架构。已同步修正 `json` 配置文件。
 
 ---
 
 ## 4. Qwen3.5 (397B/A17B)
 
-*   **核心依据**: [Qwen3.5-397B-A17B Technical Details (NVIDIA/Alibaba)](https://www.nvidia.com/zh-cn/ai-data-science/generative-ai/qwen-3-5/)
+*   **核心依据**: [Qwen3.5-397B-A17B (HuggingFace)](https://huggingface.co/Qwen/Qwen3.5-397B-A17B) / [Qwen Official Blog](https://qwen.ai/blog/qwen3.5-towards-native-multimodal-agents/)
 *   **参数详情**:
     *   `num_layers`: 60
     *   `hidden_size`: 4096
