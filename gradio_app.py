@@ -664,9 +664,5 @@ def launch_app(host: str, port: int, share: bool) -> None:
     demo.launch(server_name=host, server_port=port, share=share)
 
 
-def main() -> None:
-    launch_app(host="0.0.0.0", port=7860, share=False)
-
-
 if __name__ == "__main__":
-    main()
+    launch_app(host="0.0.0.0", port=7860, share=False)

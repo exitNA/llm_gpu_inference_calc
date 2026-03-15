@@ -8,6 +8,7 @@
   "hidden_size": 7168,
   "num_heads": 128,
   "num_kv_heads": 128,
-  "head_dim": 56,
-  "latent_cache_dim": 512
+  "head_dim": 64,
+  "latent_cache_dim": 512,
+  "cache_aux_bytes_per_token_per_layer": 128.0
 }

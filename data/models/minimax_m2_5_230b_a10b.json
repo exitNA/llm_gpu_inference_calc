@@ -4,9 +4,9 @@
     "attention_type": "hybrid_attention",
     "total_params_b": 230,
     "activated_params_per_token_b": 10,
-    "num_layers": 62,
-    "hidden_size": 3072,
-    "num_heads": 48,
+    "num_layers": 32,
+    "hidden_size": 4096,
+    "num_heads": 32,
     "num_kv_heads": 8,
     "head_dim": 128,
     "cache_bytes_per_token_per_layer": 4096

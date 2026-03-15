@@ -547,6 +547,13 @@ $$
 * $B_{decode/token}$：每生成 1 个 token 的主要字节访问量
 * $\eta_{decode}$：折减系数
 
+
+> 💡 **架构优势洞察：**
+> 引入 KV Cache 并发访存开销 ($B_{kv\_cache/step}$) 后，在长上下文 (长 $E[S]$) 且高并发场景下：
+> 1. **GQA/MHA** 等传统架构的 KV Cache 访存开销会随序列长度极速攀升，导致 $TPS_{decode}^{spec}$ 严重下滑。
+> 2. **MLA (DeepSeek-V3/R1、Kimi-K2.5)** 因巨幅压缩了 $E_{cache}$, 访存开销极低，此时带给集群的吞吐瓶颈大幅度减轻。
+> 3. **Linear Attention (如 Qwen3.5的 Gated DeltaNet、Mamba等)** 其隐状态大小固定，不随上下文长度增加，因此在极长文本时，其吞吐几乎不衰减。
+
 建议：
 
 * 乐观：0.50–0.70

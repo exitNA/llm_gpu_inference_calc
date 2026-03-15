@@ -365,15 +365,22 @@ def estimate_throughput_per_gpu_by_spec(
     model: ModelConfig,
     gpu: GPUConfig,
     runtime: RuntimeConfig,
+    avg_total_tokens: float,
 ) -> dict[str, float | None]:
     activated_params = estimate_activated_params_billion(model) * 1e9
     bytes_per_param = precision_to_bytes(runtime.precision)
-    bytes_per_token = activated_params * bytes_per_param
+    weight_bytes_per_token = activated_params * bytes_per_param
     flops_per_token = activated_params * 2.0
+    
+    # Calculate KV cache bytes per step (per token)
+    cache_bytes_per_token_per_layer = estimate_cache_bytes_per_token_per_layer(model, runtime)
+    kv_cache_bytes_per_step = model.num_layers * avg_total_tokens * cache_bytes_per_token_per_layer
+    
+    total_bytes_per_token = weight_bytes_per_token + kv_cache_bytes_per_step
 
     decode_memory_limited_tps = None
-    if gpu.memory_bandwidth_gb_per_sec and gpu.memory_bandwidth_gb_per_sec > 0 and bytes_per_token > 0:
-        decode_memory_limited_tps = (gpu.memory_bandwidth_gb_per_sec * 1e9) / bytes_per_token
+    if gpu.memory_bandwidth_gb_per_sec and gpu.memory_bandwidth_gb_per_sec > 0 and total_bytes_per_token > 0:
+        decode_memory_limited_tps = (gpu.memory_bandwidth_gb_per_sec * 1e9) / total_bytes_per_token
 
     prefill_memory_limited_tps = None
     if decode_memory_limited_tps is not None:
@@ -405,7 +412,7 @@ def estimate_throughput_per_gpu_by_spec(
 
     return {
         "activated_params_billion": estimate_activated_params_billion(model),
-        "bytes_per_token": bytes_per_token,
+        "total_bytes_per_token": total_bytes_per_token,
         "flops_per_token": flops_per_token,
         "decode_tps_per_gpu_memory_limited": decode_memory_limited_tps,
         "decode_tps_per_gpu_compute_limited": compute_limited_tps,
@@ -423,8 +430,9 @@ def estimate_throughput_based_gpu_count(
     traffic: TrafficConfig,
     gpu: GPUConfig,
     runtime: RuntimeConfig,
+    avg_total_tokens: float,
 ) -> dict[str, int | float | None]:
-    throughput = estimate_throughput_per_gpu_by_spec(model, gpu, runtime)
+    throughput = estimate_throughput_per_gpu_by_spec(model, gpu, runtime, avg_total_tokens)
     decode_gpu_count = None
     prefill_gpu_count = None
 
@@ -496,7 +504,13 @@ def evaluate_single_model_with_ha(
         runtime=runtime,
         use_p95=use_p95_for_memory_sizing,
     )
-    throughput_info = estimate_throughput_based_gpu_count(model, traffic, gpu, runtime)
+    throughput_info = estimate_throughput_based_gpu_count(
+        model=model, 
+        traffic=traffic, 
+        gpu=gpu, 
+        runtime=runtime,
+        avg_total_tokens=mem_info["avg_total_tokens"]
+    )
 
     candidate_counts = [mem_info["gpu_count_by_memory"]]
     decode_gpu_count = throughput_info["decode_gpu_count_by_throughput"]

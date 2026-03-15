@@ -1,12 +1,13 @@
 {
     "model_name": "Qwen3.5-397B-A17B",
     "arch_family": "moe",
-    "attention_type": "gqa",
+    "attention_type": "hybrid_attention",
     "total_params_b": 397,
     "activated_params_per_token_b": 17,
     "num_layers": 60,
     "hidden_size": 4096,
     "num_heads": 32,
     "num_kv_heads": 2,
-    "head_dim": 128
+    "head_dim": 256,
+    "cache_bytes_per_token_per_layer": 1024.0
 }
