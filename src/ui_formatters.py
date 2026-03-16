@@ -301,72 +301,93 @@ def build_overview_html(result: dict[str, Any]) -> str:
     <div class="result-card-unified">
       <!-- 头部核心结论 -->
       <div class="result-card-header">
-        <div class="hero-gpu-count">
+        <div class="hero-gpu-count-box">
           <span class="hero-gpu-number">{result['total_gpu_count_after_ha']}</span>
-          <span class="hero-gpu-unit">GPUs 总采购</span>
+          <span class="hero-gpu-unit">GPUs</span>
         </div>
         <div class="result-card-title-area">
           <div class="hero-model-name-large">
             {model_name}
-            {constraint_badges}
           </div>
-          <div class="hero-subtitle">
-            基于 {sizing_basis} 策略测算的最优组合
+          <div class="hero-tag-row">
+            {constraint_badges}
+            <span class="hero-strategy-tag">策略: {sizing_basis}</span>
           </div>
         </div>
       </div>
 
       <!-- 核心指标网格 -->
-      <div class="result-card-body">
+      <div class="result-card-body-grid">
         
         <!-- Column 1: 模型与算力 -->
-        <div class="result-group">
-          <div class="result-group-title">模型与算力</div>
+        <div class="result-group-card">
+          <div class="result-group-header">
+            <span class="group-icon">🧠</span>
+            <span class="result-group-title">模型参数</span>
+          </div>
           
-          <div class="result-item">
-            <span class="result-item-label">模型</span>
-            <span class="result-item-value">{params_b:.0f}B</span>
-            <span class="result-item-sub">{arch.upper()} · {attn.upper()}</span>
+          <div class="result-item-row">
+            <span class="result-item-label">规模</span>
+            <div class="result-item-content">
+              <span class="result-item-value">{params_b:.0f}B</span>
+              <span class="result-item-sub">{arch.upper()} · {attn.upper()}</span>
+            </div>
           </div>
 
-          <div class="result-item">
-            <span class="result-item-label">GPU 显卡</span>
-            <span class="result-item-value">{result['gpu_config'].vram_gb:.0f} GB</span>
-            <span class="result-item-sub">{gpu_name} ({prec}/{kv_dtype}) · 可用 {runtime_gb:.0f} GB</span>
+          <div class="result-item-row">
+            <span class="result-item-label">显卡</span>
+            <div class="result-item-content">
+              <span class="result-item-value">{result['gpu_config'].vram_gb:.0f}GB</span>
+              <span class="result-item-sub">{gpu_name} ({prec}/{kv_dtype})</span>
+            </div>
           </div>
         </div>
 
         <!-- Column 2: 流量与部署 -->
-        <div class="result-group">
-          <div class="result-group-title">流量与部署</div>
+        <div class="result-group-card">
+          <div class="result-group-header">
+            <span class="group-icon">🚦</span>
+            <span class="result-group-title">流量配置</span>
+          </div>
           
-          <div class="result-item">
-            <span class="result-item-label">网关并发</span>
-            <span class="result-item-value">{concurrency} 请求</span>
-            <span class="result-item-sub">输入 {result['avg_input_tokens']:.0f} / 输出 {result['avg_output_tokens']:.0f} 词元</span>
+          <div class="result-item-row">
+            <span class="result-item-label">并发</span>
+            <div class="result-item-content">
+              <span class="result-item-value">{concurrency} Req</span>
+              <span class="result-item-sub">In {result['avg_input_tokens']:.0f} / Out {result['avg_output_tokens']:.0f} tok</span>
+            </div>
           </div>
 
-          <div class="result-item">
+          <div class="result-item-row">
             <span class="result-item-label">高可用</span>
-            <span class="result-item-value">{ha_mode_cn}</span>
-            <span class="result-item-sub">{result['replica_count']} 副本 · 冗余 +{result['ha_extra_gpu_count']} 卡</span>
+            <div class="result-item-content">
+              <span class="result-item-value">{ha_mode_cn}</span>
+              <span class="result-item-sub">{result['replica_count']} 副本 · 冗余 +{result['ha_extra_gpu_count']} 卡</span>
+            </div>
           </div>
         </div>
 
         <!-- Column 3: 服务能力 (SLAs) -->
-        <div class="result-group">
-          <div class="result-group-title">服务能力估算</div>
+        <div class="result-group-card highlight-group">
+          <div class="result-group-header">
+            <span class="group-icon">⚡</span>
+            <span class="result-group-title">性能估算</span>
+          </div>
           
-          <div class="result-item">
-            <span class="result-item-label">吞吐与产能上限</span>
-            <span class="result-item-value" style="font-size: 14px;">D {_fmt_tps_compact(target_decode_tps)} / P {_fmt_tps_compact(target_prefill_tps)} tok/s</span>
-            <span class="result-item-sub">日上限 D {_fmt_token_volume_compact(daily_decode)} / P {_fmt_token_volume_compact(daily_prefill)} tok</span>
+          <div class="result-item-row">
+            <span class="result-item-label">吞吐</span>
+            <div class="result-item-content">
+              <span class="result-item-value-compact">D {_fmt_tps_compact(target_decode_tps)} / P {_fmt_tps_compact(target_prefill_tps)} tok/s</span>
+              <span class="result-item-sub">日上限 {_fmt_token_volume_compact(daily_decode)} / {_fmt_token_volume_compact(daily_prefill)} tok</span>
+            </div>
           </div>
 
-          <div class="result-item">
-            <span class="result-item-label">平均一次对话耗时</span>
-            <span class="result-item-value">{_fmt(avg_conversation_duration, ' s')}</span>
-            <span class="result-item-sub">Prefill {_fmt(avg_prefill_duration, ' s')} + Decode {_fmt(avg_decode_duration, ' s')}</span>
+          <div class="result-item-row">
+            <span class="result-item-label">响应</span>
+            <div class="result-item-content">
+              <span class="result-item-value">{_fmt(avg_conversation_duration, ' s')}</span>
+              <span class="result-item-sub">P {_fmt(avg_prefill_duration, 's')} + D {_fmt(avg_decode_duration, 's')}</span>
+            </div>
           </div>
         </div>
 
