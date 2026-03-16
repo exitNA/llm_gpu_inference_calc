@@ -142,12 +142,14 @@ flowchart LR
 | `kv_cache_dtype`             | 模型配置 | KV Cache 的数据存储格式 |
 | `weight_overhead_ratio`      | 模型配置 | 模型权重显存膨胀的冗余比例，默认 0.15 |
 | `runtime_overhead_ratio`     | 模型配置 | 运行时上下文等占模型的比例，默认 0.08 |
-| `runtime_overhead_gb`        | 模型配置 | 基础运行时保底显存绝对值，单位 GB，默认 2.0 |
+| `runtime_overhead_gb`        | 模型配置 | 基础运行时保底显存绝对值，用于 CUDA Context/NCCL 等静态开销，单位 GB，默认 2.0 |
 | `usable_vram_ratio`          | 显卡配置 | 防 OOM 的安全可用显存比例，默认 0.90 |
-| `decode_efficiency`          | 显卡配置 | Decode 阶段基于硬件规格打底的理论折减系数，默认 0.40 |
-| `prefill_efficiency`         | 显卡配置 | Prefill 阶段基于硬件规格打底的理论折减系数，默认 0.55 |
-| `compute_efficiency`         | 显卡配置 | 极限发热/功耗墙等导致的峰值算力折减系数，默认 0.60 |
-| `prefill_memory_reuse_factor`| 显卡配置 | Prefill 阶段批处理时显存带宽的虚拟读取放大倍率，默认 24.0 |
+| `decode_efficiency`          | 显卡配置 | Decode 阶段基于硬件规格打底的理论折减系数（基于 MBU），默认 0.40 |
+| `prefill_efficiency`         | 显存配置 | Prefill 阶段基于硬件规格打底的理论折减系数（基于 MFU），默认 0.55 |
+| `compute_efficiency`         | 显存配置 | 极限发热/功耗墙等导致的峰值算力折减系数，默认 0.60 |
+| `prefill_memory_reuse_factor`| 显存配置 | Prefill 阶段批处理时显存带宽的虚拟读取放大倍率，默认 24.0 |
+| `framework`                  | 运行环境 | 推理引擎选择 (vLLM / SGLang) |
+| `prefix_cache_hit_rate`      | 运行环境 | 前缀缓存 (Prefix Cache) 命中率，降低 Prefill 耗时 |
 
 ---
 
@@ -432,6 +434,22 @@ $$
 M_{runtime} = \max(M_{runtime,fixed},\ r_{runtime}\times M_{weights})
 $$
 
+#### 理论与实践来源：
+1. **$M_{runtime,fixed}$ (保底值)**：对应基础设施开销。
+   - **CUDA Context & Libraries**: 初始化 GPU 时，CUDA Driver 建立 Context 约占 **300 MB - 800 MB**。加载 cuBLAS、cuDNN、NCCL 等库及其 Workspace 进一步增加开销。
+   - **引擎静态驻留**: 推理引擎（如 vLLM/SGLang）自身在管理面的内存对象、HTTP 服务状态等。
+   - **结论**: 在 7B 等小模型上，静态底噪占比显著，故设 **2.0 GB** 作为物理下限（Floor Value）。
+2. **$r_{runtime}$ (运行时比例)**：对应模型相关开销。
+   - **CUDA Graphs (算子图捕获)**: 推理引擎默认通过预捕获算子执行流并预分配张量池（Static Buffer）来提升速度。该缓冲区大小与模型层数、宽度和配置的 Max Token Length 呈正相关。
+   - **Activation Memory**: 推理前向计算中产生的中间激活张量。虽然推理时会释放，但在高性能模式下常被提前锁定。
+   - **结论**: 业界（如 NVIDIA TensorRT-LLM 或 Meta Llama 实践指南）通常建议预留模型权重的 **5% - 15%** 应对动态抖动。本工具中 vLLM 取中性值 **8%**。
+   - **SGLang**: 相比 vLLM，因需维护 **RadixTree (前缀缓存树)** 的元数据索引节点，其管理面开销随缓存深度略微增长，故建议将 $r_{runtime}$ 提升至 **10%**。
+
+> [!NOTE]
+> **运行时开销与安全水位线的区别**：运行时开销是推理框架**内部**为了高性能而必须预占用的“账面支出”（如算子图）；而下方 5.7 节提到的“安全水位线”是预留给**框架外部**系统环境（驱动、监控、碎片）的“生命保险”。两者处于不同维度，不可完全合并。
+
+
+
 ---
 
 ### 5.6 平均显存与 P95 显存
@@ -473,6 +491,17 @@ $$
 $$
 r_{usable} = 0.90
 $$
+
+#### 为什么需要安全水位线？
+即便已经计算了“运行时开销”，依然必须保留水位线限制（对应 vLLM 参数 [`--gpu-memory-utilization`](https://docs.vllm.ai/en/latest/getting_started/engine_args.html)），其逻辑依据如下：
+1. **预防“窒息”**：根据 NVIDIA Driver 架构，显存达到 100% 时，驱动层分配请求失败会导致进程被内核强杀。任何微小的异步分配（如显存监控扫描、NCCL 状态切换）都是潜在威胁。
+2. **分配机制瓶颈**：vLLM 的 PagedAttention 机制在扣除权重和运行时开销后，会尝试将剩余的可用空间 **一次性全额申请** 并切分为 KV Cache 池。如果没有水位线限制，系统将没有冗余空间应对任何动态波动。
+3. **隔离环境差异**：根据 vLLM 社区实践，保留 10% 冗余是应对 CUDA Context 及 Fragmented Non-torch Memory 的经典配置。
+
+**工程准则**：
+- **$M_{runtime}$ (运行时开销)**：是模型**内部**运行所需的辅助资源。
+- **$r_{usable}$ (安全水位线)**：是防止物理显存**溢出**的最后一道保险。
+
 
 显存约束卡数：
 
@@ -531,8 +560,14 @@ $$
 ### 7.1 Decode 吞吐
 
 $$
-TPS_{decode}^{spec} = \min(TPS_{decode,compute},\ TPS_{decode,memory}) \times \eta_{decode}
+TPS_{decode}^{spec} = \min(TPS_{decode,bandwidth},\ TPS_{decode,compute}) \times r_{decode\_eff} \times (1.15 \text{ if SGLang})
 $$
+
+#### 理论与数据来源
+1. **$r_{decode\_eff} = 0.40$ (Decode 效率 / MBU 瓶颈)**：
+   - **物理本质**：Decode 阶段是典型的**内存受限（Memory-bound）**任务。每一个 Token 的生成都需要将整个模型权重从 HBM 加载到计算核心。
+   - **数据偏差来源**：实际带宽利用率（Model Bandwidth Utilization, MBU）受非连续内存访问开销、指令发射延迟及存储体冲突（Bank Conflicts）影响。
+   - **权威依据**: [Databricks 性能研究报告](https://www.databricks.com/blog/llm-inference-performance-engineering-best-practices)指出，生产环境下的 MBU 通常处于 **40% - 60%** 区间。本工具取保守基准值 40%。
 
 简化为带宽主导时：
 
@@ -580,8 +615,14 @@ $$
 ### 7.2 Prefill 吞吐
 
 $$
-TPS_{prefill}^{spec} = \min(TPS_{prefill,compute},\ TPS_{prefill,memory}) \times \eta_{prefill}
+TPS_{prefill}^{spec} = \min(TPS_{prefill,compute},\ TPS_{prefill,memory}) \times r_{prefill\_eff} \times (1.10 \text{ if SGLang})
 $$
+
+#### 理论与数据来源
+1. **$r_{prefill\_eff} = 0.55$ (Prefill 效率 / MFU 瓶颈)**：
+   - **物理本质**：Prefill 阶段是典型的**算力受限（Compute-bound）**任务，主要处理高并行度的矩阵乘法。
+   - **权威依据**: [Google PaLM 论文](https://arxiv.org/abs/2204.02311) 提出了 **MFU (Model FLOPs Utilization)** 指标。实际中，由于算子切换时间、非线性层计算以及反量化过程，硬件利用率很难达到 100%。
+   - **实测性能**: [FlashAttention-2 论文](https://arxiv.org/abs/2307.08691) 指出，即便像 FlashAttention 这样极致优化的算子，其在 H100 等高端 GPU 上的实测 MFU 通常也在 **50% - 70%** 之间。本工具采用 55% 作为生产环境的稳健估算基数。
 
 #### 算力上界
 
@@ -739,3 +780,29 @@ $$
 * 结果值
 
 这样在修改模型预设、GPU 规格、请求画像或效率系数时，可以直接对照 UI/JSON 的过程明细逐项验证，而不必人工反推。
+## 10. 推理框架建模 (vLLM vs SGLang)
+
+不同的推理框架在调度算法、算子实现及显存管理上存在差异，这些差异直接影响容量规划的准确性。
+
+### 10.1 vLLM (基准)
+*   **PagedAttention**: 几乎消除显存碎片，利用率高达 90% 以上。
+*   **性能特征**: 工业界最通用的吞吐基准（Baseline）。
+
+### 10.2 SGLang (高性能增强)
+*   **FlashInfer**: 相比 vLLM 默认 Kernel，SGLang 使用 FlashInfer 往往能获得更高的算力利用率。
+    *   *建模*: 算力效率乘以 `1.10` 加成。
+*   **RadixAttention (前缀缓存)**:
+    *   **时间收益**: 缓存命中的输入 token 片段（如 System Prompt）不再需要重新计算。计算平均对话耗时时，Prefill 耗时的分子由 `avg_input_tokens` 降为 `avg_input_tokens * (1 - cache_hit_rate)`。
+    *   **空间代偿**: 维护前序树 (RadixTree) 元数据节点需要额外显存开销。
+    *   *建模*: 运行时显存占比比例 (`runtime_overhead_ratio`) 额外增加 `2%`（如默认从 8% 变为 10%）。
+*   **调度优化**: SGLang 的 Continuous Batching 调度在 Batch 填充率和切换开销上更优。
+    *   *建模*: Decode 效率乘以 `1.15` 加成。
+
+### 10.3 参数映射总结
+
+| 框架 | 算力利用率加成 | Decode 调度加成 | 额外 vRAM 开销 | 前缀缓存支持 |
+| :--- | :--- | :--- | :--- | :--- |
+| vLLM | 1.00 (基准) | 1.00 (基准) | 0% | 有限 (默认 0%) |
+| SGLang | 1.10 | 1.15 | +2% | 原生 (默认 20%+) |
+
+在该 Sizing 工具中，切换引擎会动态调整上述底层系数，从而更真实地反映真实上线后的资源水位。

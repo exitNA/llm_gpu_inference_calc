@@ -71,6 +71,8 @@ def default_component_values() -> tuple[Any, ...]:
         8,   # default runtime_overhead_ratio (%)
         2,   # default runtime_overhead_gb
         90,  # default usable_vram_ratio (%)
+        "vllm", # default framework
+        0.0,    # default prefix_cache_hit_rate (%)
     )
 
 def default_shape_values() -> tuple[Any, ...]:
@@ -149,6 +151,8 @@ def build_configs(
     runtime_overhead_ratio: Any,
     runtime_overhead_gb: Any,
     usable_vram_ratio: Any,
+    framework: Any,
+    prefix_cache_hit_rate: Any,
     *shape_values: Any,
 ):
     concurrency_value = to_int(concurrency, "并发量")
@@ -168,6 +172,7 @@ def build_configs(
     rt_overhead_ratio_val = to_float(runtime_overhead_ratio, "运行时显存占比") / 100.0
     rt_overhead_gb_val = to_float(runtime_overhead_gb, "基础运行时显存")
     u_vram_ratio_val = to_float(usable_vram_ratio, "安全可用显存比例") / 100.0
+    hit_rate_val = to_float(prefix_cache_hit_rate, "前缀缓存命中率") / 100.0
 
     ensure_positive(concurrency_value, "并发量")
     ensure_positive(target_prefill_tps_total_value, "目标 Prefill TPS")
@@ -176,6 +181,7 @@ def build_configs(
     ensure_non_negative(w_overhead_ratio_val, "模型参数额外开销")
     ensure_non_negative(rt_overhead_ratio_val, "运行时显存占比")
     ensure_non_negative(rt_overhead_gb_val, "基础运行时显存")
+    ensure_non_negative(hit_rate_val, "前缀缓存命中率")
     if u_vram_ratio_val <= 0 or u_vram_ratio_val > 1.0:
         raise ValueError("安全可用显存比例必须在 0 到 1 之间")
 
@@ -193,6 +199,8 @@ def build_configs(
         runtime_overhead_ratio=rt_overhead_ratio_val,
         runtime_overhead_gb=rt_overhead_gb_val,
         usable_vram_ratio=u_vram_ratio_val,
+        framework=str(framework).lower(),
+        prefix_cache_hit_rate=hit_rate_val,
         # fallback to defaults for efficiencies for now, as they are not exposed in UI
         decode_efficiency=0.40,
         prefill_efficiency=0.55,
@@ -316,17 +324,6 @@ def gradio_dropdown_update(choices: list[tuple[str, str]], value: str):
     return gr.Dropdown(choices=choices, value=value)
 
 
-def build_config_panel_intro_html() -> str:
-    return """
-    <div class="config-panel-hero">
-      <p class="config-panel-eyebrow">Control Panel</p>
-      <div class="config-panel-title-row">
-        <h2>参数配置</h2>
-        <span class="config-panel-status">实时计算</span>
-      </div>
-      <p class="config-panel-copy">调整左侧参数，右侧结果会自动更新。</p>
-    </div>
-    """
 
 
 def build_config_section_header_html(icon: str, title: str, description: str) -> str:
@@ -379,7 +376,6 @@ def build_app():
             # ── Left: Configuration Panel ──
             with gr.Column(scale=4, min_width=420, elem_classes=["workspace-sidebar"]):
                 with gr.Group(elem_classes=["config-panel"]):
-                    gr.HTML(build_config_panel_intro_html())
 
                     with gr.Group(elem_classes=["config-section", "config-section-model"]):
                         gr.HTML(build_config_section_header_html("🧠", "模型配置", "模型选择与运行时冗余预算"))
@@ -410,6 +406,20 @@ def build_app():
                                 info="最低保障的运行时开销绝对值",
                                 elem_classes=["compact-slider"],
                             )
+                        
+                        framework = gr.Radio(
+                            label="推理引擎",
+                            choices=["vLLM", "SGLang"],
+                            value="vLLM" if default_values[14] == "vllm" else "SGLang",
+                            elem_classes=["compact-radio"],
+                        )
+                        prefix_cache_hit_rate = gr.Slider(
+                            minimum=0, maximum=100, step=1,
+                            label="前缀缓存命中率 (%)",
+                            value=default_values[15],
+                            info="RadixAttention 命中的输入 token 比例",
+                            elem_classes=["compact-slider"],
+                        )
 
                     with gr.Group(elem_classes=["config-section", "config-section-gpu"]):
                         gr.HTML(build_config_section_header_html("🖥️", "显卡配置", "GPU 规格、精度与安全水位线"))
@@ -564,6 +574,8 @@ def build_app():
             runtime_overhead_ratio,
             runtime_overhead_gb,
             usable_vram_ratio,
+            framework,
+            prefix_cache_hit_rate,
         ]
         all_inputs = base_inputs + shape_components
 
@@ -591,6 +603,18 @@ def build_app():
             outputs=precision_dropdown,
         )
 
+        def _update_framework_defaults(engine):
+            import gradio as gr
+            if engine == "SGLang":
+                return gr.update(value=20)
+            return gr.update(value=0)
+
+        framework.change(
+            fn=_update_framework_defaults,
+            inputs=framework,
+            outputs=prefix_cache_hit_rate
+        )
+
         def _update_ha_visibles(m):
             import gradio as gr
             is_enabled = m != "不启用"
@@ -612,6 +636,7 @@ def build_app():
             ha_mode, replica_count, failover_reserve_ratio,
             use_p95_for_memory_sizing, weight_overhead_ratio,
             runtime_overhead_ratio, runtime_overhead_gb, usable_vram_ratio,
+            framework, prefix_cache_hit_rate,
         ] + shape_components
 
         for component in auto_calc_inputs:
@@ -636,6 +661,8 @@ def build_app():
             runtime_overhead_ratio,
             runtime_overhead_gb,
             usable_vram_ratio,
+            framework,
+            prefix_cache_hit_rate,
             *shape_components,
             overview_html,
             memory_html,

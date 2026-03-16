@@ -42,16 +42,16 @@ TRAFFIC_PROFILE = TrafficProfile(
     decode_tps_per_concurrency=20.0,
     prefill_tps_per_concurrency=500.0,
     request_shapes=(
-        RequestShape(name="轻问答", ratio=0.50, avg_input_tokens=1200, avg_output_tokens=220),
-        RequestShape(name="中等分析", ratio=0.35, avg_input_tokens=4000, avg_output_tokens=600),
-        RequestShape(name="长上下文", ratio=0.15, avg_input_tokens=12000, avg_output_tokens=1200),
+        RequestShape(name="轻问答", ratio=0.6, avg_input_tokens=1200, avg_output_tokens=220),
+        RequestShape(name="中等分析", ratio=0.3, avg_input_tokens=4000, avg_output_tokens=1000),
+        RequestShape(name="长上下文", ratio=0.1, avg_input_tokens=20000, avg_output_tokens=10000),
     ),
-    note="固定使用 50% 轻问答、35% 中等分析、15% 长上下文的混合流量画像。",
+    note="固定使用 60% 轻问答、30% 中等分析、10% 长上下文的混合流量画像。",
 )
 
 DEFAULT_MODEL_PRESET_KEY = "deepseek_r1_671b"
-DEFAULT_GPU_PRESET_KEY = "h200"
-DEFAULT_CONCURRENCY = 10
+DEFAULT_GPU_PRESET_KEY = "h20"
+DEFAULT_CONCURRENCY = 5
 
 
 def build_default_traffic_targets(concurrency: int) -> tuple[float, float]:

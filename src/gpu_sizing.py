@@ -51,6 +51,8 @@ class RuntimeConfig:
     prefill_efficiency: float = 0.55
     compute_efficiency: float = 0.60
     prefill_memory_reuse_factor: float = 24.0
+    framework: str = "vllm"
+    prefix_cache_hit_rate: float = 0.0
 
 
 @dataclass
@@ -113,6 +115,28 @@ def format_adaptive_memory(bytes_val: float, digits: int = 2) -> str:
     return f"{format_calc_number(bytes_val, 0)} bytes"
 
 
+def format_adaptive_tps(value: float | None) -> str:
+    if value is None:
+        return "-"
+    amount = float(value)
+    units = ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K"))
+    for threshold, suffix in units:
+        if abs(amount) >= threshold:
+            return f"{amount / threshold:.1f}{suffix} tok/s"
+    return f"{amount:.0f} tok/s"
+
+
+def format_adaptive_token_volume(value: float | None) -> str:
+    if value is None:
+        return "-"
+    amount = float(value)
+    units = ((1e12, "T"), (1e9, "B"), (1e6, "M"), (1e3, "K"))
+    for threshold, suffix in units:
+        if abs(amount) >= threshold:
+            return f"{amount / threshold:.1f}{suffix} tok"
+    return f"{amount:.1f} tok"
+
+
 def ceil_div(a: float, b: float) -> int:
     return ceil(a / b)
 
@@ -148,10 +172,32 @@ def estimate_average_conversation_duration_sec(
     concurrency: int,
     cluster_prefill_tps_capacity: float | None,
     cluster_decode_tps_capacity: float | None,
+    prefill_tps_per_gpu_spec: float | None = None,
+    decode_tps_per_gpu_spec: float | None = None,
+    replica_count: int = 1,
+    prefix_cache_hit_rate: float = 0.0,
 ) -> dict[str, float | None]:
-    prefill_tps_per_request = divide_optional(cluster_prefill_tps_capacity, concurrency)
-    decode_tps_per_request = divide_optional(cluster_decode_tps_capacity, concurrency)
-    avg_prefill_duration_sec = divide_optional(avg_input_tokens, prefill_tps_per_request)
+    # 理论均摊能力
+    theoretical_prefill_tps_per_request = divide_optional(cluster_prefill_tps_capacity, concurrency)
+    theoretical_decode_tps_per_request = divide_optional(cluster_decode_tps_capacity, concurrency)
+    
+    # 物理单线速度盖板 (单个请求最多只能在一个 Replica 上跑满)
+    max_physical_prefill_tps = multiply_optional(prefill_tps_per_gpu_spec, replica_count)
+    max_physical_decode_tps = multiply_optional(decode_tps_per_gpu_spec, replica_count)
+    
+    # 取两者较慢的一个（TPS更小的，即耗时更长的）
+    prefill_tps_per_request = theoretical_prefill_tps_per_request
+    if prefill_tps_per_request is not None and max_physical_prefill_tps is not None:
+        prefill_tps_per_request = min(prefill_tps_per_request, max_physical_prefill_tps)
+        
+    decode_tps_per_request = theoretical_decode_tps_per_request
+    if decode_tps_per_request is not None and max_physical_decode_tps is not None:
+        decode_tps_per_request = min(decode_tps_per_request, max_physical_decode_tps)
+
+    # Calculate effective input tokens after prefix cache
+    effective_input_tokens = avg_input_tokens * (1.0 - prefix_cache_hit_rate)
+
+    avg_prefill_duration_sec = divide_optional(effective_input_tokens, prefill_tps_per_request)
     avg_decode_duration_sec = divide_optional(avg_output_tokens, decode_tps_per_request)
 
     if avg_prefill_duration_sec is None or avg_decode_duration_sec is None:
@@ -165,6 +211,10 @@ def estimate_average_conversation_duration_sec(
         "avg_prefill_duration_sec": avg_prefill_duration_sec,
         "avg_decode_duration_sec": avg_decode_duration_sec,
         "avg_conversation_duration_sec": avg_conversation_duration_sec,
+        "theoretical_decode_tps_per_request": theoretical_decode_tps_per_request,
+        "max_physical_decode_tps": max_physical_decode_tps,
+        "theoretical_prefill_tps_per_request": theoretical_prefill_tps_per_request,
+        "max_physical_prefill_tps": max_physical_prefill_tps,
     }
 
 
@@ -449,7 +499,7 @@ def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str,
                 f"{format_calc_number(gpu.memory_bandwidth_gb_per_sec)} × 1e9 ÷ "
                 f"{format_calc_number(weight_bytes_per_token + kv_cache_bytes_per_step)}"
             ),
-            result=f"{format_calc_number(result['decode_tps_per_gpu_memory_limited'])} tok/s",
+            result=f"{format_adaptive_tps(result['decode_tps_per_gpu_memory_limited'])}",
         ),
         build_calc_step(
             label="单卡 Prefill 吞吐上限（带宽约束）",
@@ -458,7 +508,7 @@ def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str,
                 f"{format_calc_number(result['decode_tps_per_gpu_memory_limited'])} × "
                 f"{format_calc_number(runtime.prefill_memory_reuse_factor)}"
             ),
-            result=f"{format_calc_number(result['prefill_tps_per_gpu_memory_limited'])} tok/s",
+            result=f"{format_adaptive_tps(result['prefill_tps_per_gpu_memory_limited'])}",
         ),
         build_calc_step(
             label="每 token 计算量",
@@ -468,23 +518,25 @@ def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str,
         ),
         build_calc_step(
             label="单卡 Decode 吞吐上限（算力约束）",
-            formula="Decode 吞吐 = 峰值算力 × 1e12 × 算力效率 ÷ 每 token 计算量",
+            formula="Decode 吞吐 = 峰值算力 × 1e12 × 算力效率 ÷ 每 token 计算量" + (" × 1.1 (FlashInfer)" if runtime.framework == "sglang" else ""),
             substitution=(
                 f"{format_calc_number(peak_compute_tflops)} × 1e12 × "
-                f"{format_calc_number(runtime.compute_efficiency, 2)} ÷ "
-                f"{format_calc_number(flops_per_token)}"
+                f"{format_calc_number(runtime.compute_efficiency, 2)}"
+                + (" × 1.10" if runtime.framework == "sglang" else "")
+                + f" ÷ {format_calc_number(flops_per_token)}"
             ),
-            result=f"{format_calc_number(result['decode_tps_per_gpu_compute_limited'])} tok/s",
+            result=f"{format_adaptive_tps(result['decode_tps_per_gpu_compute_limited'])}",
         ),
         build_calc_step(
             label="单卡 Decode 规格吞吐",
-            formula="Decode 规格吞吐 = min(带宽上限, 算力上限) × Decode 效率",
+            formula="Decode 规格吞吐 = min(带宽上限, 算力上限) × Decode 效率" + (" × 1.15 (SGLang 调度)" if runtime.framework == "sglang" else ""),
             substitution=(
                 f"min({format_calc_number(result['decode_tps_per_gpu_memory_limited'])}, "
                 f"{format_calc_number(result['decode_tps_per_gpu_compute_limited'])}) × "
                 f"{format_calc_number(runtime.decode_efficiency, 2)}"
+                + (" × 1.15" if runtime.framework == "sglang" else "")
             ),
-            result=f"{format_calc_number(result['decode_tps_per_gpu_spec'])} tok/s",
+            result=f"{format_adaptive_tps(result['decode_tps_per_gpu_spec'])}",
         ),
         build_calc_step(
             label="单卡 Prefill 规格吞吐",
@@ -494,7 +546,7 @@ def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str,
                 f"{format_calc_number(result['prefill_tps_per_gpu_compute_limited'])}) × "
                 f"{format_calc_number(runtime.prefill_efficiency, 2)}"
             ),
-            result=f"{format_calc_number(result['prefill_tps_per_gpu_spec'])} tok/s",
+            result=f"{format_adaptive_tps(result['prefill_tps_per_gpu_spec'])}",
         ),
         build_calc_step(
             label="Decode 吞吐约束卡数",
@@ -552,7 +604,7 @@ def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str,
                 f"{result['business_gpu_count']} × "
                 f"{format_calc_number(result['decode_tps_per_gpu_spec'])}"
             ),
-            result=f"{format_calc_number(result['cluster_decode_tps_capacity'])} tok/s",
+            result=f"{format_adaptive_tps(result['cluster_decode_tps_capacity'])}",
         ),
         build_calc_step(
             label="集群 Prefill 理论上限",
@@ -561,7 +613,7 @@ def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str,
                 f"{result['business_gpu_count']} × "
                 f"{format_calc_number(result['prefill_tps_per_gpu_spec'])}"
             ),
-            result=f"{format_calc_number(result['cluster_prefill_tps_capacity'])} tok/s",
+            result=f"{format_adaptive_tps(result['cluster_prefill_tps_capacity'])}",
         ),
         build_calc_step(
             label="每日 Decode token 上限",
@@ -569,7 +621,7 @@ def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str,
             substitution=(
                 f"{format_calc_number(result['cluster_decode_tps_capacity'])} × 86,400"
             ),
-            result=f"{format_calc_number(result['daily_decode_token_capacity'])} tokens/day",
+            result=f"{format_adaptive_token_volume(result['daily_decode_token_capacity'])}/day",
         ),
         build_calc_step(
             label="每日 Prefill token 上限",
@@ -577,25 +629,30 @@ def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str,
             substitution=(
                 f"{format_calc_number(result['cluster_prefill_tps_capacity'])} × 86,400"
             ),
-            result=f"{format_calc_number(result['daily_prefill_token_capacity'])} tokens/day",
+            result=f"{format_adaptive_token_volume(result['daily_prefill_token_capacity'])}/day",
         ),
         build_calc_step(
             label="平均 Prefill 耗时",
-            formula="平均 Prefill 耗时 = 平均输入长度 ÷ (集群 Prefill 上限 ÷ 并发)",
+            formula="平均 Prefill 耗时 = 平均输入长度" + (" × (1 - 前缀命中率)" if hasattr(runtime, 'prefix_cache_hit_rate') and runtime.prefix_cache_hit_rate > 0 else "") + " ÷ min(集群均摊, 单副本极限)",
             substitution=(
-                f"{format_calc_number(result['avg_input_tokens'])} ÷ "
-                f"({format_calc_number(result['cluster_prefill_tps_capacity'])} ÷ {traffic.concurrency})"
+                f"{format_calc_number(result['avg_input_tokens'])}"
+                + (f" × (1 - {format_calc_number(runtime.prefix_cache_hit_rate, 2)})" if hasattr(runtime, 'prefix_cache_hit_rate') and runtime.prefix_cache_hit_rate > 0 else "")
+                + f" ÷ min({format_calc_number(result['theoretical_prefill_tps_per_request'])}, "
+                f"{format_calc_number(result['max_physical_prefill_tps'])})"
             ),
             result=f"{format_calc_number(result['avg_prefill_duration_sec'])} s",
+            note="单副本物理极速 = 单卡 Prefill 规格吞吐 × TPU/GPU 副本数",
         ),
         build_calc_step(
             label="平均 Decode 耗时",
-            formula="平均 Decode 耗时 = 平均输出长度 ÷ (集群 Decode 上限 ÷ 并发)",
+            formula="平均 Decode 耗时 = 平均输出长度 ÷ min(集群均摊能力, 单副本物理极速)",
             substitution=(
                 f"{format_calc_number(result['avg_output_tokens'])} ÷ "
-                f"({format_calc_number(result['cluster_decode_tps_capacity'])} ÷ {traffic.concurrency})"
+                f"min({format_calc_number(result['theoretical_decode_tps_per_request'])}, "
+                f"{format_calc_number(result['max_physical_decode_tps'])})"
             ),
             result=f"{format_calc_number(result['avg_decode_duration_sec'])} s",
+            note="单副本物理极速 = 单卡 Decode 规格吞吐 × TPU/GPU 副本数",
         ),
         build_calc_step(
             label="平均一次对话耗时",
@@ -866,7 +923,9 @@ def estimate_kv_distribution_gb(model: ModelConfig, traffic: TrafficConfig, runt
 
 
 def estimate_runtime_overhead_gb(runtime: RuntimeConfig, weight_with_overhead_gb: float) -> float:
-    proportional_runtime = weight_with_overhead_gb * runtime.runtime_overhead_ratio
+    # SGLang maintains a RadixTree for prefix caching, which adds slight metadata overhead
+    extra_overhead = 0.02 if runtime.framework == "sglang" else 0.0
+    proportional_runtime = weight_with_overhead_gb * (runtime.runtime_overhead_ratio + extra_overhead)
     return max(runtime.runtime_overhead_gb, proportional_runtime)
 
 
@@ -977,12 +1036,17 @@ def estimate_throughput_per_gpu_by_spec(
         prefill_memory_limited_tps = decode_memory_limited_tps * runtime.prefill_memory_reuse_factor
 
     peak_compute_tflops = get_peak_compute_tflops(gpu, runtime.precision)
+    
+    # Apply SGLang FlashInfer and scheduler efficiencies if applicable
+    compute_efficiency_multiplier = 1.10 if runtime.framework == "sglang" else 1.0
+    decode_efficiency_multiplier = 1.15 if runtime.framework == "sglang" else 1.0
+    
     compute_limited_tps = None
     if peak_compute_tflops and peak_compute_tflops > 0 and flops_per_token > 0:
         compute_limited_tps = (
             peak_compute_tflops
             * 1e12
-            * runtime.compute_efficiency
+            * (runtime.compute_efficiency * compute_efficiency_multiplier)
             / flops_per_token
         )
 
@@ -992,7 +1056,7 @@ def estimate_throughput_per_gpu_by_spec(
     prefill_candidates = [
         value for value in (prefill_memory_limited_tps, compute_limited_tps) if value is not None
     ]
-    decode_tps_spec = min(decode_candidates) * runtime.decode_efficiency if decode_candidates else None
+    decode_tps_spec = min(decode_candidates) * (runtime.decode_efficiency * decode_efficiency_multiplier) if decode_candidates else None
     prefill_tps_spec = min(prefill_candidates) * runtime.prefill_efficiency if prefill_candidates else None
     decode_tpot_ms = (
         1000.0 / decode_memory_limited_tps
@@ -1135,6 +1199,10 @@ def evaluate_single_model_with_ha(
         concurrency=traffic.concurrency,
         cluster_prefill_tps_capacity=cluster_prefill_tps_capacity,
         cluster_decode_tps_capacity=cluster_decode_tps_capacity,
+        prefill_tps_per_gpu_spec=throughput_info["prefill_tps_per_gpu_spec"],
+        decode_tps_per_gpu_spec=throughput_info["decode_tps_per_gpu_spec"],
+        replica_count=mem_info["gpu_count_by_memory"],
+        prefix_cache_hit_rate=runtime.prefix_cache_hit_rate,
     )
 
     estimated_total_cost = None
@@ -1187,6 +1255,11 @@ def evaluate_single_model_with_ha(
             conversation_duration_info["avg_conversation_duration_sec"],
             1,
         ),
+        "theoretical_decode_tps_per_request": conversation_duration_info["theoretical_decode_tps_per_request"],
+        "max_physical_decode_tps": conversation_duration_info["max_physical_decode_tps"],
+        "theoretical_prefill_tps_per_request": conversation_duration_info["theoretical_prefill_tps_per_request"],
+        "max_physical_prefill_tps": conversation_duration_info["max_physical_prefill_tps"],
+
         "token_capacity_basis": "business_gpu_count",
         "decode_tps_per_gpu_memory_limited": round_optional(
             throughput_info["decode_tps_per_gpu_memory_limited"],
@@ -1231,9 +1304,17 @@ def evaluate_single_model_with_ha(
     }
     calculation_process_sections = build_calculation_process_sections(result)
     result["calculation_process_sections"] = calculation_process_sections
-    result["calculation_process_text"] = format_calculation_process_text(
-        calculation_process_sections,
-    )
+    
+    calc_text = format_calculation_process_text(calculation_process_sections)
+    result["calculation_process_text"] = calc_text
+    
+    # 打印详细计算过程供 CLI 或 AI 测试调试使用
+    print("\n" + "=" * 60)
+    print(f"📐 [GPU Sizing 计算推导链路] GPU: {gpu.gpu_name} | 模型: {model.model_name}")
+    print("=" * 60)
+    print(calc_text)
+    print("=" * 60 + "\n")
+
     return result
 
 

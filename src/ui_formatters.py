@@ -29,7 +29,17 @@ def format_metric_value(value: Any, suffix: str = "") -> str:
 def _fmt_tps_compact(value: Any) -> str:
     if value is None:
         return "-"
-    return f"{float(value):.0f}"
+    amount = float(value)
+    units = (
+        (1e12, "T"),
+        (1e9, "B"),
+        (1e6, "M"),
+        (1e3, "K"),
+    )
+    for threshold, suffix in units:
+        if abs(amount) >= threshold:
+            return f"{amount / threshold:.1f}{suffix}"
+    return f"{amount:.0f}"
 
 
 def _fmt_token_volume_compact(value: Any) -> str:
@@ -110,60 +120,57 @@ def build_shape_name_html(name: str) -> str:
 
 
 def _render_calc_steps_compact(steps: list[dict[str, Any]]) -> str:
-    """Render calculation steps in a compact table format with grouping support."""
-    rows = []
+    """Render calculation steps as a compact derivation chain."""
+    rows: list[str] = []
     for step in steps:
         if step.get("is_group"):
-            variants = step.get("variants", [])
-            rowspan = len(variants)
-            for i, var in enumerate(variants):
-                label_cell = ""
-                if i == 0:
-                    label_cell = f'<td class="calc-label-td" rowspan="{rowspan}">{escape(step["label"])}</td>'
-                
-                note = var.get("note", "")
-                note_html = f'<div class="calc-note">{escape(note)}</div>' if note else ""
-                
-                rows.append(f"""
-                    <tr>
-                      {label_cell}
-                      <td class="calc-formula-td">
-                        <div class="calc-f-main"><span class="calc-branch-marker">[{escape(var["name"])}]</span> {escape(var["formula"])}</div>
-                        <div class="calc-f-subst">{escape(var["substitution"])}</div>
-                        {note_html}
-                      </td>
-                      <td class="calc-result-td">{escape(var["result"])}</td>
-                    </tr>
+            # Render group label as a heading, then each variant indented
+            variant_rows: list[str] = []
+            for var in step.get("variants", []):
+                note_html = ""
+                if var.get("note"):
+                    note_html = f'<div class="cd-note">{escape(var["note"])}</div>'
+                variant_rows.append(f"""
+                <div class="cd-row cd-variant">
+                  <div class="cd-head">
+                    <span class="cd-branch">{escape(var["name"])}</span>
+                    <span class="cd-eq">=</span>
+                    <span class="cd-result">{escape(var["result"])}</span>
+                  </div>
+                  <div class="cd-body">
+                    <span class="cd-formula">{escape(var["formula"])}</span>
+                    <span class="cd-subst">{escape(var["substitution"])}</span>
+                  </div>
+                  {note_html}
+                </div>
                 """)
-        else:
-            note = step.get("note", "")
-            note_html = f'<div class="calc-note">{escape(note)}</div>' if note else ""
             rows.append(f"""
-                <tr>
-                  <td class="calc-label-td">{escape(step["label"])}</td>
-                  <td class="calc-formula-td">
-                    <div class="calc-f-main">{escape(step["formula"])}</div>
-                    <div class="calc-f-subst">{escape(step["substitution"])}</div>
-                    {note_html}
-                  </td>
-                  <td class="calc-result-td">{escape(step["result"])}</td>
-                </tr>
+            <div class="cd-group">
+              <div class="cd-group-label">{escape(step["label"])}</div>
+              {"".join(variant_rows)}
+            </div>
             """)
-    
-    return f"""
-    <table class="calc-table">
-      <thead>
-        <tr>
-          <th style="width: 130px;">指标项</th>
-          <th>计算详情 / 代入值</th>
-          <th style="width: 100px; text-align: right;">结果</th>
-        </tr>
-      </thead>
-      <tbody>
-        {"".join(rows)}
-      </tbody>
-    </table>
-    """
+        else:
+            note_html = ""
+            if step.get("note"):
+                note_html = f'<div class="cd-note">{escape(step["note"])}</div>'
+            rows.append(f"""
+            <div class="cd-row">
+              <div class="cd-head">
+                <span class="cd-label">{escape(step["label"])}</span>
+                <span class="cd-eq">=</span>
+                <span class="cd-result">{escape(step["result"])}</span>
+              </div>
+              <div class="cd-body">
+                <span class="cd-formula">{escape(step["formula"])}</span>
+                <span class="cd-subst">{escape(step["substitution"])}</span>
+              </div>
+              {note_html}
+            </div>
+            """)
+
+    return f"""<div class="cd-chain">{"".join(rows)}</div>"""
+
 
 
 def _render_calc_accordion(title: str, steps: list[dict[str, Any]]) -> str:
@@ -281,6 +288,9 @@ def build_overview_html(result: dict[str, Any]) -> str:
     attn = escape(result.get("attention_type", ""))
     sizing_basis = result["memory_sizing_basis"]
 
+    ha_mode_cn = HA_MODE_CN.get(result['ha_mode'], result['ha_mode'])
+    runtime_gb = result.get('usable_vram_gb_per_gpu', 0)
+    
     # Calculation process for Section 0: Request Profile Stats
     calc_sections = result.get("calculation_process_sections", [])
     section_0_html = ""
@@ -288,63 +298,81 @@ def build_overview_html(result: dict[str, Any]) -> str:
         section_0_html = _render_calc_accordion("🔍 长度分布计算细节", calc_sections[0].get("steps", []))
 
     return f"""
-    <div class="step-section" style="padding: 0; border: none; background: transparent; box-shadow: none;">
-      <!-- Conclusion Hero -->
-      <div class="conclusion-hero">
+    <div class="result-card-unified">
+      <!-- 头部核心结论 -->
+      <div class="result-card-header">
         <div class="hero-gpu-count">
           <span class="hero-gpu-number">{result['total_gpu_count_after_ha']}</span>
           <span class="hero-gpu-unit">GPUs 总采购</span>
         </div>
-        <div class="hero-details">
-          <div class="hero-model-name">{model_name}</div>
-          <div class="hero-chips">
-            <span class="hero-chip">{gpu_name}</span>
-            <span class="hero-chip">{prec} / {kv_dtype}</span>
-            <span class="hero-chip">{sizing_basis} 策略</span>
-            <span class="hero-chip">并发 {concurrency}</span>
-            <span class="hero-chip">速度 D {_fmt_tps_compact(target_decode_tps)} / P {_fmt_tps_compact(target_prefill_tps)} tok/s</span>
-            <span class="hero-chip">日产能 D {_fmt_token_volume_compact(daily_decode)} / P {_fmt_token_volume_compact(daily_prefill)} tok</span>
-            <span class="hero-chip">平均对话 {_fmt(avg_conversation_duration, ' s')}</span>
+        <div class="result-card-title-area">
+          <div class="hero-model-name-large">
+            {model_name}
             {constraint_badges}
+          </div>
+          <div class="hero-subtitle">
+            基于 {sizing_basis} 策略测算的最优组合
           </div>
         </div>
       </div>
 
-      <!-- Input Context -->
-      <div class="context-grid">
-        <div class="context-card">
-          <span class="context-label">模型</span>
-          <span class="context-value">{params_b:.0f}B</span>
-          <span class="context-meta">{arch.upper()} · {attn.upper()}</span>
+      <!-- 核心指标网格 -->
+      <div class="result-card-body">
+        
+        <!-- Column 1: 模型与算力 -->
+        <div class="result-group">
+          <div class="result-group-title">模型与算力</div>
+          
+          <div class="result-item">
+            <span class="result-item-label">模型</span>
+            <span class="result-item-value">{params_b:.0f}B</span>
+            <span class="result-item-sub">{arch.upper()} · {attn.upper()}</span>
+          </div>
+
+          <div class="result-item">
+            <span class="result-item-label">GPU 显卡</span>
+            <span class="result-item-value">{result['gpu_config'].vram_gb:.0f} GB</span>
+            <span class="result-item-sub">{gpu_name} ({prec}/{kv_dtype}) · 可用 {runtime_gb:.0f} GB</span>
+          </div>
         </div>
-        <div class="context-card">
-          <span class="context-label">GPU 显卡</span>
-          <span class="context-value">{result['gpu_config'].vram_gb:.0f} GB</span>
-          <span class="context-meta">{gpu_name} · 可用 {result['usable_vram_gb_per_gpu']:.0f} GB</span>
+
+        <!-- Column 2: 流量与部署 -->
+        <div class="result-group">
+          <div class="result-group-title">流量与部署</div>
+          
+          <div class="result-item">
+            <span class="result-item-label">网关并发</span>
+            <span class="result-item-value">{concurrency} 请求</span>
+            <span class="result-item-sub">输入 {result['avg_input_tokens']:.0f} / 输出 {result['avg_output_tokens']:.0f} 词元</span>
+          </div>
+
+          <div class="result-item">
+            <span class="result-item-label">高可用</span>
+            <span class="result-item-value">{ha_mode_cn}</span>
+            <span class="result-item-sub">{result['replica_count']} 副本 · 冗余 +{result['ha_extra_gpu_count']} 卡</span>
+          </div>
         </div>
-        <div class="context-card">
-          <span class="context-label">网关并发</span>
-          <span class="context-value">{concurrency} 请求</span>
-          <span class="context-meta">输入 {result['avg_input_tokens']:.0f} / 输出 {result['avg_output_tokens']:.0f} 词元 · D {_fmt_tps_compact(target_decode_tps)} / P {_fmt_tps_compact(target_prefill_tps)} tok/s</span>
+
+        <!-- Column 3: 服务能力 (SLAs) -->
+        <div class="result-group">
+          <div class="result-group-title">服务能力估算</div>
+          
+          <div class="result-item">
+            <span class="result-item-label">吞吐与产能上限</span>
+            <span class="result-item-value" style="font-size: 14px;">D {_fmt_tps_compact(target_decode_tps)} / P {_fmt_tps_compact(target_prefill_tps)} tok/s</span>
+            <span class="result-item-sub">日上限 D {_fmt_token_volume_compact(daily_decode)} / P {_fmt_token_volume_compact(daily_prefill)} tok</span>
+          </div>
+
+          <div class="result-item">
+            <span class="result-item-label">平均一次对话耗时</span>
+            <span class="result-item-value">{_fmt(avg_conversation_duration, ' s')}</span>
+            <span class="result-item-sub">Prefill {_fmt(avg_prefill_duration, ' s')} + Decode {_fmt(avg_decode_duration, ' s')}</span>
+          </div>
         </div>
-        <div class="context-card">
-          <span class="context-label">高可用</span>
-          <span class="context-value">{HA_MODE_CN.get(result['ha_mode'], result['ha_mode'])}</span>
-          <span class="context-meta">{result['replica_count']} 副本 · 冗余 +{result['ha_extra_gpu_count']} 卡</span>
-        </div>
-        <div class="context-card">
-          <span class="context-label">每日 token 上限</span>
-          <span class="context-value">D {_fmt_token_volume_compact(daily_decode)} / P {_fmt_token_volume_compact(daily_prefill)}</span>
-          <span class="context-meta">按业务基线卡数估算，不重复计入 HA 冗余</span>
-        </div>
-        <div class="context-card">
-          <span class="context-label">平均一次对话耗时</span>
-          <span class="context-value">{_fmt(avg_conversation_duration, ' s')}</span>
-          <span class="context-meta">Prefill {_fmt(avg_prefill_duration, ' s')} + Decode {_fmt(avg_decode_duration, ' s')}</span>
-        </div>
+
       </div>
-      {section_0_html}
     </div>
+    {section_0_html}
     """
 
 
@@ -540,19 +568,19 @@ def build_throughput_analysis_html(result: dict[str, Any]) -> str:
           <div class="tp-metric-stack">
             <div class="tp-metric-row">
               <span class="tp-metric-label">集群需求 TPS</span>
-              <span class="tp-metric-value">{target_decode:.0f} tok/s</span>
+              <span class="tp-metric-value">{_fmt_tps_compact(target_decode)} tok/s</span>
             </div>
             <div class="tp-metric-row">
               <span class="tp-metric-label">单卡能力（综合）</span>
-              <span class="tp-metric-value">{_fmt(decode_spec, ' tok/s')}</span>
+              <span class="tp-metric-value">{_fmt_tps_compact(decode_spec)} tok/s</span>
             </div>
             <div class="tp-metric-row">
               <span class="tp-metric-label">├ 带宽受限</span>
-              <span class="tp-metric-value">{_fmt(decode_mem, ' tok/s')}</span>
+              <span class="tp-metric-value">{_fmt_tps_compact(decode_mem)} tok/s</span>
             </div>
             <div class="tp-metric-row">
               <span class="tp-metric-label">└ 算力受限</span>
-              <span class="tp-metric-value">{_fmt(decode_comp, ' tok/s')}</span>
+              <span class="tp-metric-value">{_fmt_tps_compact(decode_comp)} tok/s</span>
             </div>
           </div>
           <div class="tp-result">
@@ -561,7 +589,7 @@ def build_throughput_analysis_html(result: dict[str, Any]) -> str:
           </div>
           <div class="tp-result" style="margin-top: 10px;">
             <span class="tp-result-label">当前集群上限</span>
-            <span class="tp-result-value">{_fmt(cluster_decode_capacity, ' tok/s')}</span>
+            <span class="tp-result-value">{_fmt_tps_compact(cluster_decode_capacity)} tok/s</span>
           </div>
           <div class="tp-result" style="margin-top: 10px;">
             <span class="tp-result-label">日供给上限</span>
@@ -578,19 +606,19 @@ def build_throughput_analysis_html(result: dict[str, Any]) -> str:
           <div class="tp-metric-stack">
             <div class="tp-metric-row">
               <span class="tp-metric-label">集群需求 TPS</span>
-              <span class="tp-metric-value">{target_prefill:.0f} tok/s</span>
+              <span class="tp-metric-value">{_fmt_tps_compact(target_prefill)} tok/s</span>
             </div>
             <div class="tp-metric-row">
               <span class="tp-metric-label">单卡能力（综合）</span>
-              <span class="tp-metric-value">{_fmt(prefill_spec, ' tok/s')}</span>
+              <span class="tp-metric-value">{_fmt_tps_compact(prefill_spec)} tok/s</span>
             </div>
             <div class="tp-metric-row">
               <span class="tp-metric-label">├ 带宽受限</span>
-              <span class="tp-metric-value">{_fmt(prefill_mem, ' tok/s')}</span>
+              <span class="tp-metric-value">{_fmt_tps_compact(prefill_mem)} tok/s</span>
             </div>
             <div class="tp-metric-row">
               <span class="tp-metric-label">└ 算力受限</span>
-              <span class="tp-metric-value">{_fmt(prefill_comp, ' tok/s')}</span>
+              <span class="tp-metric-value">{_fmt_tps_compact(prefill_comp)} tok/s</span>
             </div>
           </div>
           <div class="tp-result">
@@ -599,7 +627,7 @@ def build_throughput_analysis_html(result: dict[str, Any]) -> str:
           </div>
           <div class="tp-result" style="margin-top: 10px;">
             <span class="tp-result-label">当前集群上限</span>
-            <span class="tp-result-value">{_fmt(cluster_prefill_capacity, ' tok/s')}</span>
+            <span class="tp-result-value">{_fmt_tps_compact(cluster_prefill_capacity)} tok/s</span>
           </div>
           <div class="tp-result" style="margin-top: 10px;">
             <span class="tp-result-label">日供给上限</span>
@@ -610,7 +638,7 @@ def build_throughput_analysis_html(result: dict[str, Any]) -> str:
 
       <div class="tp-bw-strip">
         <span class="tp-bw-label">理论带宽上限（单卡）</span>
-        <span class="tp-bw-value">{_fmt(bw_limited, ' tok/s')}</span>
+        <span class="tp-bw-value">{_fmt_tps_compact(bw_limited)} tok/s</span>
       </div>
       {section_2_html}
     </div>
