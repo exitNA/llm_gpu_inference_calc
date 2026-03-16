@@ -257,7 +257,7 @@ def build_default_result() -> dict[str, Any]:
 
 def run_analysis(
     *raw_inputs: Any,
-) -> tuple[str, str, str, str, list[list[str]], list[list[str]], str, dict[str, Any]]:
+) -> tuple[str, str, str, str, list[list[str]], list[list[str]], dict[str, Any]]:
     model, traffic, gpu, ha, runtime, use_p95_for_memory_sizing = build_configs(*raw_inputs)
     result = evaluate_single_model_with_ha(
         model=model,
@@ -274,7 +274,6 @@ def run_analysis(
         build_final_summary_html(result),
         build_request_detail_rows(result),
         build_kv_detail_rows(result),
-        build_calculation_process_html(result),
         result,
     )
 
@@ -357,7 +356,6 @@ def reset_all():
         build_final_summary_html(default_result),
         build_request_detail_rows(default_result),
         build_kv_detail_rows(default_result),
-        build_calculation_process_html(default_result),
         default_result,
     )
 
@@ -547,10 +545,6 @@ def build_app():
                                 label="KV Cache 明细",
                                 value=build_kv_detail_rows(default_result),
                             )
-                        with gr.Tab("计算过程"):
-                            calculation_markdown = gr.HTML(
-                                value=build_calculation_process_html(default_result),
-                            )
                         with gr.Tab("原始 JSON"):
                             raw_json = gr.JSON(label="原始结果", value=default_result)
 
@@ -580,7 +574,6 @@ def build_app():
             final_html,
             request_table,
             kv_table,
-            calculation_markdown,
             raw_json,
         ]
 
@@ -650,7 +643,6 @@ def build_app():
             final_html,
             request_table,
             kv_table,
-            calculation_markdown,
             raw_json,
         ]
         reset_button.click(fn=reset_all, outputs=reset_outputs)

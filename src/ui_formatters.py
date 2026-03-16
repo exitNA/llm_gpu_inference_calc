@@ -109,6 +109,77 @@ def build_shape_name_html(name: str) -> str:
     return f'<div class="selection-card" style="margin-top:6px"><strong>{escape(name)}</strong></div>'
 
 
+def _render_calc_steps_compact(steps: list[dict[str, Any]]) -> str:
+    """Render calculation steps in a compact table format with grouping support."""
+    rows = []
+    for step in steps:
+        if step.get("is_group"):
+            variants = step.get("variants", [])
+            rowspan = len(variants)
+            for i, var in enumerate(variants):
+                label_cell = ""
+                if i == 0:
+                    label_cell = f'<td class="calc-label-td" rowspan="{rowspan}">{escape(step["label"])}</td>'
+                
+                note = var.get("note", "")
+                note_html = f'<div class="calc-note">{escape(note)}</div>' if note else ""
+                
+                rows.append(f"""
+                    <tr>
+                      {label_cell}
+                      <td class="calc-formula-td">
+                        <div class="calc-f-main"><span class="calc-branch-marker">[{escape(var["name"])}]</span> {escape(var["formula"])}</div>
+                        <div class="calc-f-subst">{escape(var["substitution"])}</div>
+                        {note_html}
+                      </td>
+                      <td class="calc-result-td">{escape(var["result"])}</td>
+                    </tr>
+                """)
+        else:
+            note = step.get("note", "")
+            note_html = f'<div class="calc-note">{escape(note)}</div>' if note else ""
+            rows.append(f"""
+                <tr>
+                  <td class="calc-label-td">{escape(step["label"])}</td>
+                  <td class="calc-formula-td">
+                    <div class="calc-f-main">{escape(step["formula"])}</div>
+                    <div class="calc-f-subst">{escape(step["substitution"])}</div>
+                    {note_html}
+                  </td>
+                  <td class="calc-result-td">{escape(step["result"])}</td>
+                </tr>
+            """)
+    
+    return f"""
+    <table class="calc-table">
+      <thead>
+        <tr>
+          <th style="width: 130px;">指标项</th>
+          <th>计算详情 / 代入值</th>
+          <th style="width: 100px; text-align: right;">结果</th>
+        </tr>
+      </thead>
+      <tbody>
+        {"".join(rows)}
+      </tbody>
+    </table>
+    """
+
+
+def _render_calc_accordion(title: str, steps: list[dict[str, Any]]) -> str:
+    """Wrap calculation steps in a collapsible details section."""
+    return f"""
+    <div class="in-card-calc">
+      <details>
+        <summary><span>{escape(title)}</span></summary>
+        <div class="calc-step-list">
+          {_render_calc_steps_compact(steps)}
+        </div>
+      </details>
+    </div>
+    """
+
+
 def build_calculation_process_html(result: dict[str, Any]) -> str:
     sections = result.get("calculation_process_sections", [])
     section_cards: list[str] = []
@@ -210,6 +281,12 @@ def build_overview_html(result: dict[str, Any]) -> str:
     attn = escape(result.get("attention_type", ""))
     sizing_basis = result["memory_sizing_basis"]
 
+    # Calculation process for Section 0: Request Profile Stats
+    calc_sections = result.get("calculation_process_sections", [])
+    section_0_html = ""
+    if len(calc_sections) > 0:
+        section_0_html = _render_calc_accordion("🔍 长度分布计算细节", calc_sections[0].get("steps", []))
+
     return f"""
     <div class="step-section" style="padding: 0; border: none; background: transparent; box-shadow: none;">
       <!-- Conclusion Hero -->
@@ -266,6 +343,7 @@ def build_overview_html(result: dict[str, Any]) -> str:
           <span class="context-meta">Prefill {_fmt(avg_prefill_duration, ' s')} + Decode {_fmt(avg_decode_duration, ' s')}</span>
         </div>
       </div>
+      {section_0_html}
     </div>
     """
 
@@ -303,6 +381,12 @@ def build_memory_analysis_html(result: dict[str, Any]) -> str:
     runtime_overhead_ratio = result["runtime_config"].runtime_overhead_ratio
     kv_per_req = result.get("p95_kv_gb_per_request", result.get("avg_kv_gb_per_request", 0))
     concurrency = result["traffic_config"].concurrency
+
+    # Calculation process for Section 1: Memory Estimation
+    calc_sections = result.get("calculation_process_sections", [])
+    section_1_html = ""
+    if len(calc_sections) > 1:
+        section_1_html = _render_calc_accordion("🔍 显存计算细节", calc_sections[1].get("steps", []))
 
     return f"""
     <div class="step-section">
@@ -388,6 +472,7 @@ def build_memory_analysis_html(result: dict[str, Any]) -> str:
           <span class="mem-summary-meta">⌈ {total_need:.0f} ÷ {usable_per_gpu:.0f} ⌉</span>
         </div>
       </div>
+      {section_1_html}
     </div>
     """
 
@@ -428,6 +513,12 @@ def build_throughput_analysis_html(result: dict[str, Any]) -> str:
         if prefill_is_bottleneck
         else '<span class="tp-badge tp-badge-prefill">Prefill</span>'
     )
+
+    # Calculation process for Section 2: Throughput Estimation
+    calc_sections = result.get("calculation_process_sections", [])
+    section_2_html = ""
+    if len(calc_sections) > 2:
+        section_2_html = _render_calc_accordion("🔍 吞吐计算细节", calc_sections[2].get("steps", []))
 
     return f"""
     <div class="step-section">
@@ -521,6 +612,7 @@ def build_throughput_analysis_html(result: dict[str, Any]) -> str:
         <span class="tp-bw-label">理论带宽上限（单卡）</span>
         <span class="tp-bw-value">{_fmt(bw_limited, ' tok/s')}</span>
       </div>
+      {section_2_html}
     </div>
     """
 
@@ -572,6 +664,12 @@ def build_final_summary_html(result: dict[str, Any]) -> str:
 
     decode_val = decode_gpu if decode_gpu is not None else '-'
     prefill_val = prefill_gpu if prefill_gpu is not None else '-'
+
+    # Calculation process for Section 3: Final Results & Derived Metrics
+    calc_sections = result.get("calculation_process_sections", [])
+    section_3_html = ""
+    if len(calc_sections) > 3:
+        section_3_html = _render_calc_accordion("🔍 最终采购与指标计算细节", calc_sections[3].get("steps", []))
 
     return f"""
     <div class="step-section">
@@ -651,6 +749,7 @@ def build_final_summary_html(result: dict[str, Any]) -> str:
         </div>
         {cost_html}
       </div>
+      {section_3_html}
     </div>
     """
 

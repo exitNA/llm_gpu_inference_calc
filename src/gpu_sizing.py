@@ -102,6 +102,17 @@ def bytes_to_gb(num_bytes: float) -> float:
     return num_bytes / 1e9
 
 
+def format_adaptive_memory(bytes_val: float, digits: int = 2) -> str:
+    """Format memory units adaptively (GB, MB, KB, bytes)."""
+    if bytes_val >= 1e9:
+        return f"{format_calc_number(bytes_val / 1e9, digits)} GB"
+    if bytes_val >= 1e6:
+        return f"{format_calc_number(bytes_val / 1e6, digits)} MB"
+    if bytes_val >= 1e3:
+        return f"{format_calc_number(bytes_val / 1e3, digits)} KB"
+    return f"{format_calc_number(bytes_val, 0)} bytes"
+
+
 def ceil_div(a: float, b: float) -> int:
     return ceil(a / b)
 
@@ -293,7 +304,7 @@ def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str,
                 f"{format_calc_number(model.num_params_billion)} B × "
                 f"{format_calc_number(bytes_per_param)} byte"
             ),
-            result=f"{format_calc_number(result['raw_weight_gb'])} GB",
+            result=f"{format_adaptive_memory(result['raw_weight_gb'] * 1e9)}",
         ),
         build_calc_step(
             label="含冗余权重显存",
@@ -302,32 +313,39 @@ def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str,
                 f"{format_calc_number(result['raw_weight_gb'])} × "
                 f"(1 + {format_calc_number(runtime.weight_overhead_ratio, 2)})"
             ),
-            result=f"{format_calc_number(result['weight_with_overhead_gb'])} GB",
+            result=f"{format_adaptive_memory(result['weight_with_overhead_gb'] * 1e9)}",
         ),
         build_calc_step(
-            label="每 token 每层缓存字节数",
-            formula="按注意力结构推导 KV Cache 字节数",
+            label="每 token 层缓存大小",
+            formula="按注意力结构推导 KV Cache (GB)",
             substitution=_describe_cache_formula(model, runtime),
-            result=f"{format_calc_number(cache_bytes_per_token_per_layer)} bytes",
+            result=f"{format_adaptive_memory(cache_bytes_per_token_per_layer, 9)}",
+            note="原单位为 bytes，转换为自适应单位显示",
         ),
-        build_calc_step(
-            label="平均单请求 KV Cache",
-            formula="KV Cache = 层数 × 平均总长度 × batch × 每 token 每层缓存字节数 ÷ 1e9",
-            substitution=(
-                f"{model.num_layers} × {format_calc_number(result['avg_total_tokens'])} × "
-                f"{traffic.batch_size_per_request} × {format_calc_number(cache_bytes_per_token_per_layer)} ÷ 1e9"
-            ),
-            result=f"{format_calc_number(result['avg_kv_gb_per_request'])} GB",
-        ),
-        build_calc_step(
-            label="P95 单请求 KV Cache",
-            formula="P95 KV Cache = 层数 × P95 总长度 × batch × 每 token 每层缓存字节数 ÷ 1e9",
-            substitution=(
-                f"{model.num_layers} × {result['p95_total_tokens']} × "
-                f"{traffic.batch_size_per_request} × {format_calc_number(cache_bytes_per_token_per_layer)} ÷ 1e9"
-            ),
-            result=f"{format_calc_number(result['p95_kv_gb_per_request'])} GB",
-        ),
+        {
+            "label": "单请求 KV Cache",
+            "is_group": True,
+            "variants": [
+                {
+                    "name": "平均",
+                    "formula": "KV = 层数 × 平均总长 × batch × 每 token 每层缓存(GB)",
+                    "substitution": (
+                        f"{model.num_layers} × {format_calc_number(result['avg_total_tokens'])} × "
+                        f"{traffic.batch_size_per_request} × {format_calc_number(cache_bytes_per_token_per_layer / 1e9, 9)}"
+                    ),
+                    "result": f"{format_adaptive_memory(result['avg_kv_gb_per_request'] * 1e9)}",
+                },
+                {
+                    "name": "P95",
+                    "formula": "KV = 层数 × P95 总长 × batch × 每 token 每层缓存(GB)",
+                    "substitution": (
+                        f"{model.num_layers} × {result['p95_total_tokens']} × "
+                        f"{traffic.batch_size_per_request} × {format_calc_number(cache_bytes_per_token_per_layer / 1e9, 9)}"
+                    ),
+                    "result": f"{format_adaptive_memory(result['p95_kv_gb_per_request'] * 1e9)}",
+                },
+            ],
+        },
         build_calc_step(
             label="运行时开销",
             formula="运行时开销 = max(保底值, 权重显存 × 运行时比例)",
@@ -336,33 +354,39 @@ def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str,
                 f"{format_calc_number(result['weight_with_overhead_gb'])} × "
                 f"{format_calc_number(runtime.runtime_overhead_ratio, 2)})"
             ),
-            result=f"{format_calc_number(result['runtime_overhead_gb'])} GB",
+            result=f"{format_adaptive_memory(result['runtime_overhead_gb'] * 1e9)}",
         ),
-        build_calc_step(
-            label="平均总显存",
-            formula="平均总显存 = 权重显存 + 平均单请求 KV Cache × 并发 + 运行时开销",
-            substitution=(
-                f"{format_calc_number(result['weight_with_overhead_gb'])} + "
-                f"{format_calc_number(result['avg_kv_gb_per_request'])} × {traffic.concurrency} + "
-                f"{format_calc_number(result['runtime_overhead_gb'])}"
-            ),
-            result=f"{format_calc_number(result['avg_total_memory_gb'])} GB",
-        ),
-        build_calc_step(
-            label="P95 总显存",
-            formula="P95 总显存 = 权重显存 + P95 单请求 KV Cache × 并发 + 运行时开销",
-            substitution=(
-                f"{format_calc_number(result['weight_with_overhead_gb'])} + "
-                f"{format_calc_number(result['p95_kv_gb_per_request'])} × {traffic.concurrency} + "
-                f"{format_calc_number(result['runtime_overhead_gb'])}"
-            ),
-            result=f"{format_calc_number(result['p95_total_memory_gb'])} GB",
-        ),
+        {
+            "label": "总显存需求",
+            "is_group": True,
+            "variants": [
+                {
+                    "name": "平均",
+                    "formula": "总显存 = 权重 + 平均 KV × 并发 + 运行时",
+                    "substitution": (
+                        f"{format_calc_number(result['weight_with_overhead_gb'])} + "
+                        f"{format_calc_number(result['avg_kv_gb_per_request'])} × {traffic.concurrency} + "
+                        f"{format_calc_number(result['runtime_overhead_gb'])}"
+                    ),
+                    "result": f"{format_adaptive_memory(result['avg_total_memory_gb'] * 1e9)}",
+                },
+                {
+                    "name": "P95",
+                    "formula": "总显存 = 权重 + P95 KV × 并发 + 运行时",
+                    "substitution": (
+                        f"{format_calc_number(result['weight_with_overhead_gb'])} + "
+                        f"{format_calc_number(result['p95_kv_gb_per_request'])} × {traffic.concurrency} + "
+                        f"{format_calc_number(result['runtime_overhead_gb'])}"
+                    ),
+                    "result": f"{format_adaptive_memory(result['p95_total_memory_gb'] * 1e9)}",
+                },
+            ],
+        },
         build_calc_step(
             label="显存 sizing 口径",
             formula="按用户选择的显存口径取值",
             substitution=f"当前选择：{result['memory_sizing_basis']}",
-            result=f"{format_calc_number(result['memory_for_sizing_gb'])} GB",
+            result=f"{format_adaptive_memory(result['memory_for_sizing_gb'] * 1e9)}",
         ),
         build_calc_step(
             label="单卡安全可用显存",
@@ -371,7 +395,7 @@ def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str,
                 f"{format_calc_number(gpu.vram_gb)} × "
                 f"{format_calc_number(runtime.usable_vram_ratio, 2)}"
             ),
-            result=f"{format_calc_number(result['usable_vram_gb_per_gpu'])} GB",
+            result=f"{format_adaptive_memory(result['usable_vram_gb_per_gpu'] * 1e9)}",
         ),
         build_calc_step(
             label="显存约束卡数",
@@ -398,7 +422,7 @@ def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str,
                 f"{format_calc_number(activated_params_billion)}e9 × "
                 f"{format_calc_number(bytes_per_param)}"
             ),
-            result=f"{format_calc_number(weight_bytes_per_token)} bytes",
+            result=f"{format_adaptive_memory(weight_bytes_per_token)}",
         ),
         build_calc_step(
             label="每步 KV 访问字节数",
@@ -407,7 +431,7 @@ def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str,
                 f"{model.num_layers} × {format_calc_number(result['avg_total_tokens'])} × "
                 f"{format_calc_number(cache_bytes_per_token_per_layer)}"
             ),
-            result=f"{format_calc_number(kv_cache_bytes_per_step)} bytes",
+            result=f"{format_adaptive_memory(kv_cache_bytes_per_step)}",
         ),
         build_calc_step(
             label="每 token 总访问字节数",
@@ -416,7 +440,7 @@ def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str,
                 f"{format_calc_number(weight_bytes_per_token)} + "
                 f"{format_calc_number(kv_cache_bytes_per_step)}"
             ),
-            result=f"{format_calc_number(weight_bytes_per_token + kv_cache_bytes_per_step)} bytes",
+            result=f"{format_adaptive_memory(weight_bytes_per_token + kv_cache_bytes_per_step)}",
         ),
         build_calc_step(
             label="单卡 Decode 吞吐上限（带宽约束）",
@@ -589,33 +613,45 @@ def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str,
             "title": "请求画像统计",
             "summary": "先把业务请求画像折算成容量规划要用的平均长度与 P95 长度。",
             "steps": [
-                build_calc_step(
-                    label="平均输入长度",
-                    formula="平均输入长度 = Σ(占比 × 输入长度)",
-                    substitution=avg_input_expr,
-                    result=f"{format_calc_number(result['avg_input_tokens'])} tokens",
-                ),
-                build_calc_step(
-                    label="平均输出长度",
-                    formula="平均输出长度 = Σ(占比 × 输出长度)",
-                    substitution=avg_output_expr,
-                    result=f"{format_calc_number(result['avg_output_tokens'])} tokens",
-                ),
-                build_calc_step(
-                    label="平均总长度",
-                    formula="平均总长度 = 平均输入长度 + 平均输出长度",
-                    substitution=(
-                        f"{format_calc_number(result['avg_input_tokens'])} + "
-                        f"{format_calc_number(result['avg_output_tokens'])}"
-                    ),
-                    result=f"{format_calc_number(result['avg_total_tokens'])} tokens",
-                ),
-                build_calc_step(
-                    label="P95 总长度",
-                    formula="P95 总长度 = 按总长度排序后，累计占比首次达到 95% 的请求长度",
-                    substitution=_describe_p95_selection(request_shapes),
-                    result=f"{result['p95_total_tokens']} tokens",
-                ),
+                {
+                    "label": "平均长度",
+                    "is_group": True,
+                    "variants": [
+                        {
+                            "name": "平均输入",
+                            "formula": "平均输入长度 = Σ(占比 × 输入长度)",
+                            "substitution": avg_input_expr,
+                            "result": f"{format_calc_number(result['avg_input_tokens'])} tokens",
+                        },
+                        {
+                            "name": "平均输出",
+                            "formula": "平均输出长度 = Σ(占比 × 输出长度)",
+                            "substitution": avg_output_expr,
+                            "result": f"{format_calc_number(result['avg_output_tokens'])} tokens",
+                        },
+                    ],
+                },
+                {
+                    "label": "总长度分布",
+                    "is_group": True,
+                    "variants": [
+                        {
+                            "name": "平均总长",
+                            "formula": "平均总长度 = 平均输入长度 + 平均输出长度",
+                            "substitution": (
+                                f"{format_calc_number(result['avg_input_tokens'])} + "
+                                f"{format_calc_number(result['avg_output_tokens'])}"
+                            ),
+                            "result": f"{format_calc_number(result['avg_total_tokens'])} tokens",
+                        },
+                        {
+                            "name": "P95 总长",
+                            "formula": "P95 分布选择逻辑",
+                            "substitution": _describe_p95_selection(request_shapes),
+                            "result": f"{result['p95_total_tokens']} tokens",
+                        },
+                    ],
+                },
             ],
         },
         {
@@ -643,12 +679,21 @@ def format_calculation_process_text(sections: list[dict[str, Any]]) -> str:
         if section.get("summary"):
             lines.append(f"- 说明: {section['summary']}")
         for step in section["steps"]:
-            lines.append(f"- {step['label']}")
-            lines.append(f"  公式: {step['formula']}")
-            lines.append(f"  代入: {step['substitution']}")
-            lines.append(f"  结果: {step['result']}")
-            if step.get("note"):
-                lines.append(f"  备注: {step['note']}")
+            if step.get("is_group"):
+                for var in step["variants"]:
+                    lines.append(f"- {step['label']} ({var['name']})")
+                    lines.append(f"  公式: {var['formula']}")
+                    lines.append(f"  代入: {var['substitution']}")
+                    lines.append(f"  结果: {var['result']}")
+                    if var.get("note"):
+                        lines.append(f"  备注: {var['note']}")
+            else:
+                lines.append(f"- {step['label']}")
+                lines.append(f"  公式: {step['formula']}")
+                lines.append(f"  代入: {step['substitution']}")
+                lines.append(f"  结果: {step['result']}")
+                if step.get("note"):
+                    lines.append(f"  备注: {step['note']}")
         lines.append("")
     return "\n".join(lines).strip()
 
