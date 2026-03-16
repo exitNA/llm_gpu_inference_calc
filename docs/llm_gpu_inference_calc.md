@@ -700,6 +700,11 @@ $$
 * `G_decode`
 * `G_biz`
 * `G_final`
+* `TPS_decode_cluster = G_biz x TPS_decode_per_gpu`
+* `TPS_prefill_cluster = G_biz x TPS_prefill_per_gpu`
+* `DailyDecodeTokensMax = TPS_decode_cluster x 86400`
+* `DailyPrefillTokensMax = TPS_prefill_cluster x 86400`
+* `AvgConversationDurationSec ≈ avg_input_tokens / (TPS_prefill_cluster / concurrency) + avg_output_tokens / (TPS_decode_cluster / concurrency)`
 
 其中：
 
@@ -710,3 +715,27 @@ $$
 $$
 G_{final} = G_{biz} + G_{HA}
 $$
+
+这里的每日 token 上限建议按业务基线卡数 `G_biz` 计算，而不是按 `G_final` 计算。原因是 `G_final` 中的 HA 冗余卡在主备、N+1 等模式下并不等价于新增可售卖产能；若直接按采购总卡数折算，会高估系统每日可供给 token。
+
+平均一次对话耗时同样建议按 `G_biz` 口径估算，并采用近似拆解：
+
+* `平均输入 token / 单请求 prefill 速度`
+* `平均输出 token / 单请求 decode 速度`
+
+其中单请求速度由当前业务基线卡数下的集群总能力，再除以当前并发数得到。这个值用于快速判断“在这组卡数下，大致一轮平均请求要多久”，是容量规划近似值，不等价于线上严格的 P95/P99 时延承诺。
+
+为了便于校验，工程输出建议同时附带“计算过程”明细，至少覆盖以下四组信息：
+
+* 请求画像统计：`avg_input_tokens`、`avg_output_tokens`、`avg_total_tokens`、`p95_total_tokens`
+* 显存估算：权重显存、KV Cache、运行时开销、`G_memory`
+* 吞吐估算：带宽受限 / 算力受限吞吐、`G_decode`、`G_prefill`
+* 最终结果：`G_biz`、`G_final`、每日 token 上限、平均一次对话耗时
+
+每个条目都应包含三部分：
+
+* 公式名
+* 代入值
+* 结果值
+
+这样在修改模型预设、GPU 规格、请求画像或效率系数时，可以直接对照 UI/JSON 的过程明细逐项验证，而不必人工反推。

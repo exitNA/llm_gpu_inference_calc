@@ -11,7 +11,7 @@ HA_MODE_CN = {
 from pathlib import Path
 from presets import get_gpu_preset, get_model_preset
 
-APP_CSS = Path(__file__).parent.joinpath("app.css").read_text(encoding="utf-8")
+APP_CSS = Path(__file__).parent.parent.joinpath("static", "app.css").read_text(encoding="utf-8")
 
 
 def _fmt(value: Any, suffix: str = "") -> str:
@@ -30,6 +30,22 @@ def _fmt_tps_compact(value: Any) -> str:
     if value is None:
         return "-"
     return f"{float(value):.0f}"
+
+
+def _fmt_token_volume_compact(value: Any) -> str:
+    if value is None:
+        return "-"
+    amount = float(value)
+    units = (
+        (1e12, "T"),
+        (1e9, "B"),
+        (1e6, "M"),
+        (1e3, "K"),
+    )
+    for threshold, suffix in units:
+        if abs(amount) >= threshold:
+            return f"{amount / threshold:.1f}{suffix}"
+    return f"{amount:.1f}"
 
 
 # ── Helpers ──────────────────────────────────────────────────────────
@@ -93,6 +109,75 @@ def build_shape_name_html(name: str) -> str:
     return f'<div class="selection-card" style="margin-top:6px"><strong>{escape(name)}</strong></div>'
 
 
+def build_calculation_process_html(result: dict[str, Any]) -> str:
+    sections = result.get("calculation_process_sections", [])
+    section_cards: list[str] = []
+    for idx, section in enumerate(sections, start=1):
+        step_cards: list[str] = []
+        for step in section.get("steps", []):
+            note_html = ""
+            if step.get("note"):
+                note_html = (
+                    f'<div class="calc-step-note">{escape(step["note"])}</div>'
+                )
+            step_cards.append(
+                f"""
+                <div class="calc-step-card">
+                  <div class="calc-step-main">
+                    <div class="calc-step-topline">
+                      <div class="calc-step-metric">{escape(step["label"])}</div>
+                      <div class="calc-step-result-inline">{escape(step["result"])}</div>
+                    </div>
+                    <div class="calc-step-formula">
+                      <span class="calc-step-k">公式</span>
+                      <span class="calc-step-v">{escape(step["formula"])}</span>
+                    </div>
+                    <div class="calc-step-detail">
+                      <span class="calc-step-k">代入</span>
+                      <span class="calc-step-v">{escape(step["substitution"])}</span>
+                    </div>
+                    {note_html}
+                  </div>
+                </div>
+                """
+            )
+        summary_html = ""
+        if section.get("summary"):
+            summary_html = (
+                f'<p class="calc-section-summary">{escape(section["summary"])}</p>'
+            )
+        section_cards.append(
+            f"""
+            <section class="calc-section-card">
+              <div class="calc-section-header">
+                <span class="calc-section-index">{idx:02d}</span>
+                <div class="calc-section-copy">
+                  <h3>{escape(section['title'])}</h3>
+                  {summary_html}
+                </div>
+              </div>
+              <div class="calc-step-list">
+                {''.join(step_cards)}
+              </div>
+            </section>
+            """
+        )
+    return f"""
+    <div class="calc-process-shell">
+      <div class="calc-process-hero">
+        <div>
+          <p class="calc-process-eyebrow">Validation View</p>
+          <h2>计算过程校验面板</h2>
+        </div>
+        <p class="calc-process-copy">按“先看结论、再看公式、最后看代入”的顺序组织，每张卡只表达一个结论，更接近人工复核时的阅读节奏。</p>
+      </div>
+      <div class="calc-process-grid">
+        {''.join(section_cards)}
+      </div>
+    </div>
+    """
+
+
 # ═══════════════════════════════════════════════════════════════════════
 #  Step ① — 概览：最终 GPU 数量 + 输入上下文
 # ═══════════════════════════════════════════════════════════════════════
@@ -115,6 +200,11 @@ def build_overview_html(result: dict[str, Any]) -> str:
     concurrency = result["traffic_config"].concurrency
     target_decode_tps = result["traffic_config"].target_decode_tps_total
     target_prefill_tps = result["traffic_config"].prefill_tokens_per_sec_total
+    daily_decode = result.get("daily_decode_token_capacity")
+    daily_prefill = result.get("daily_prefill_token_capacity")
+    avg_conversation_duration = result.get("avg_conversation_duration_sec")
+    avg_prefill_duration = result.get("avg_prefill_duration_sec")
+    avg_decode_duration = result.get("avg_decode_duration_sec")
     params_b = result["model_config"].num_params_billion
     arch = escape(result.get("arch_family", ""))
     attn = escape(result.get("attention_type", ""))
@@ -136,6 +226,8 @@ def build_overview_html(result: dict[str, Any]) -> str:
             <span class="hero-chip">{sizing_basis} 策略</span>
             <span class="hero-chip">并发 {concurrency}</span>
             <span class="hero-chip">速度 D {_fmt_tps_compact(target_decode_tps)} / P {_fmt_tps_compact(target_prefill_tps)} tok/s</span>
+            <span class="hero-chip">日产能 D {_fmt_token_volume_compact(daily_decode)} / P {_fmt_token_volume_compact(daily_prefill)} tok</span>
+            <span class="hero-chip">平均对话 {_fmt(avg_conversation_duration, ' s')}</span>
             {constraint_badges}
           </div>
         </div>
@@ -162,6 +254,16 @@ def build_overview_html(result: dict[str, Any]) -> str:
           <span class="context-label">高可用</span>
           <span class="context-value">{HA_MODE_CN.get(result['ha_mode'], result['ha_mode'])}</span>
           <span class="context-meta">{result['replica_count']} 副本 · 冗余 +{result['ha_extra_gpu_count']} 卡</span>
+        </div>
+        <div class="context-card">
+          <span class="context-label">每日 token 上限</span>
+          <span class="context-value">D {_fmt_token_volume_compact(daily_decode)} / P {_fmt_token_volume_compact(daily_prefill)}</span>
+          <span class="context-meta">按业务基线卡数估算，不重复计入 HA 冗余</span>
+        </div>
+        <div class="context-card">
+          <span class="context-label">平均一次对话耗时</span>
+          <span class="context-value">{_fmt(avg_conversation_duration, ' s')}</span>
+          <span class="context-meta">Prefill {_fmt(avg_prefill_duration, ' s')} + Decode {_fmt(avg_decode_duration, ' s')}</span>
         </div>
       </div>
     </div>
@@ -307,6 +409,10 @@ def build_throughput_analysis_html(result: dict[str, Any]) -> str:
     bw_limited = result.get("theoretical_tokens_per_sec_bandwidth_limited")
     target_decode = result["traffic_config"].target_decode_tps_total
     target_prefill = result["traffic_config"].prefill_tokens_per_sec_total
+    cluster_decode_capacity = result.get("cluster_decode_tps_capacity")
+    cluster_prefill_capacity = result.get("cluster_prefill_tps_capacity")
+    daily_decode = result.get("daily_decode_token_capacity")
+    daily_prefill = result.get("daily_prefill_token_capacity")
 
     dominant = get_dominant_constraints(result)
     decode_is_bottleneck = "Decode 吞吐" in dominant
@@ -362,6 +468,14 @@ def build_throughput_analysis_html(result: dict[str, Any]) -> str:
             <span class="tp-result-label">需要 GPU</span>
             <span class="tp-result-value">{decode_gpu if decode_gpu is not None else '-'}</span>
           </div>
+          <div class="tp-result" style="margin-top: 10px;">
+            <span class="tp-result-label">当前集群上限</span>
+            <span class="tp-result-value">{_fmt(cluster_decode_capacity, ' tok/s')}</span>
+          </div>
+          <div class="tp-result" style="margin-top: 10px;">
+            <span class="tp-result-label">日供给上限</span>
+            <span class="tp-result-value">{_fmt_token_volume_compact(daily_decode)} tok</span>
+          </div>
         </div>
 
         <!-- Prefill Card -->
@@ -391,6 +505,14 @@ def build_throughput_analysis_html(result: dict[str, Any]) -> str:
           <div class="tp-result">
             <span class="tp-result-label">需要 GPU</span>
             <span class="tp-result-value">{prefill_gpu if prefill_gpu is not None else '-'}</span>
+          </div>
+          <div class="tp-result" style="margin-top: 10px;">
+            <span class="tp-result-label">当前集群上限</span>
+            <span class="tp-result-value">{_fmt(cluster_prefill_capacity, ' tok/s')}</span>
+          </div>
+          <div class="tp-result" style="margin-top: 10px;">
+            <span class="tp-result-label">日供给上限</span>
+            <span class="tp-result-value">{_fmt_token_volume_compact(daily_prefill)} tok</span>
           </div>
         </div>
       </div>
@@ -429,6 +551,9 @@ def build_final_summary_html(result: dict[str, Any]) -> str:
 
     dominant = get_dominant_constraints(result)
     dominant_text = " · ".join(dominant)
+    daily_decode = result.get("daily_decode_token_capacity")
+    daily_prefill = result.get("daily_prefill_token_capacity")
+    avg_conversation_duration = result.get("avg_conversation_duration_sec")
 
     mem_gpu = result["gpu_count_by_memory"]
     decode_gpu = result["decode_gpu_count_by_throughput"]
@@ -513,6 +638,16 @@ def build_final_summary_html(result: dict[str, Any]) -> str:
           <span class="ha-detail-label">HA 模式</span>
           <span class="ha-detail-value">{ha_mode}</span>
           <span class="ha-detail-meta">{replicas} 副本</span>
+        </div>
+        <div class="ha-detail-card">
+          <span class="ha-detail-label">每日 token 上限</span>
+          <span class="ha-detail-value">D {_fmt_token_volume_compact(daily_decode)} / P {_fmt_token_volume_compact(daily_prefill)}</span>
+          <span class="ha-detail-meta">按业务基线卡数估算，不重复计入 HA 冗余</span>
+        </div>
+        <div class="ha-detail-card">
+          <span class="ha-detail-label">平均一次对话耗时</span>
+          <span class="ha-detail-value">{_fmt(avg_conversation_duration, ' s')}</span>
+          <span class="ha-detail-meta">按 G_biz 与当前并发近似估算</span>
         </div>
         {cost_html}
       </div>

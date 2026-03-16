@@ -7,7 +7,7 @@ from pathlib import Path
 
 from gpu_sizing import GPUConfig, ModelConfig
 
-DATA_DIR = Path(__file__).resolve().parent / "data"
+DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 MODELS_DIR = DATA_DIR / "models"
 GPUS_DIR = DATA_DIR / "gpus"
 

@@ -8,6 +8,11 @@ try:
     
     result = build_default_result()
     print("build_default_result() passed. Memory: ", result.get("avg_total_memory_gb"))
+    assert "daily_decode_token_capacity" in result
+    assert "daily_prefill_token_capacity" in result
+    assert "avg_conversation_duration_sec" in result
+    assert "calculation_process_sections" in result
+    assert result["calculation_process_sections"]
     print("SUCCESS")
 except Exception as e:
     import traceback
