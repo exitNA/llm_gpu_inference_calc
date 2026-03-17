@@ -400,18 +400,18 @@ $$
 
 至少应校验：
 
-- `concurrency_avg > 0`
-- `concurrency_peak >= concurrency_avg`
-- `target_ttft_avg_sec > 0`
-- `target_ttft_p95_sec >= target_ttft_avg_sec`
-- `target_e2e_avg_sec > target_ttft_avg_sec`
-- `target_e2e_p95_sec > target_ttft_p95_sec`
+- $concurrency\_avg > 0$
+- $concurrency\_peak >= concurrency\_avg$
+- $target\_ttft\_avg\_sec > 0$
+- $target\_ttft\_p95\_sec >= target\_ttft\_avg\_sec$
+- $target\_e2e\_avg\_sec > target\_ttft\_avg\_sec$
+- $target\_e2e\_p95\_sec > target\_ttft\_p95\_sec$
 - $0 < decode\_active\_ratio\_avg \le 1$
 - $0 < decode\_active\_ratio\_peak \le 1$
 - $0 < usable\_vram\_ratio \le 1$
 - $\sum request\_shapes.weight = 1$
-- `memory_bandwidth_efficiency > 0`
-- `compute_efficiency > 0`
+- $memory\_bandwidth\_efficiency > 0$
+- $compute\_efficiency > 0$
 
 ### 6.2 从 `request_shapes` 派生全局长度统计
 
