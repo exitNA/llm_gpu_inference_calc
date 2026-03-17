@@ -55,7 +55,7 @@
 4. 平均 / P95 对话时延反推属于 sanity check，不构成 SLA 证明。
 5. 多维 P95 长度拼装属于保守 sizing，而非严格联合分布建模。
 6. 多卡实例的显存可行性，在采购前阶段按**实例级 pooled/sharded 可行性上界**处理，不等价于 replicated 多卡实例的严格显存证明。
-7. 文中核心推导统一使用 $byte$、$byte/s$、$FLOP$、$FLOP/s$、$token$、$second$；仅在结果展示层转换为人类易读单位。
+7. 文中主变量默认遵循全局单位约定：$M_*$ 为 $byte$，带宽相关量为 $byte/s$，算力相关量为 $FLOP/s$，token 吞吐相关量为 $token/s$；仅在结果展示层转换为人类易读单位。
 
 若需要更高精度建模，应补充：
 
@@ -159,16 +159,17 @@ flowchart LR
 
 除最终展示外，全文中间计算统一采用：
 
-- 存储、显存、带宽：$byte$、$byte/s$
-- token 长度与吞吐：$token$、$token/s$
-- 计算量与算力：$FLOP$、$FLOP/s$
-- 时间：$second$
+- 存储与显存相关的 $M_*$ 默认单位为 $byte$。
+- 带宽相关的量默认单位为 $byte/s$。
+- token 长度与吞吐相关的量默认单位为 $token$、$token/s$。
+- 计算量与算力相关的量默认单位为 $FLOP$、$FLOP/s$。
+- 时间默认单位为 $second$。
 
 辅助函数只用于承载**确定映射**，不吸收任何经验假设：
 
 - $bytes\_per\_param(inference\_precision)$：每参数字节数
 - $bytes\_per\_cache\_element(kv\_cache\_dtype)$：KV cache 元素字节数
-- $peak\_compute\_flops\_per\_sec(inference\_precision)$：按推理精度选取 GPU 对应峰值算力，单位 $FLOP/s$
+- $peak\_compute\_flops(inference\_precision)$：按推理精度选取 GPU 对应峰值算力，单位 $FLOP/s$
 
 ### 4.5 记号映射
 
@@ -201,6 +202,12 @@ flowchart LR
 | `memory_bandwidth_efficiency` | `bw_eff` |
 | `compute_efficiency` | `cmp_eff` |
 | `usable_vram_ratio` | `vram_use` |
+| `memory_bandwidth_per_sec` | `bw_peak` |
+| `fp16_peak_flops` | `fp16_peak` |
+| `bf16_peak_flops` | `bf16_peak` |
+| `fp8_peak_flops` | `fp8_peak` |
+| `int8_peak_flops` | `int8_peak` |
+| `int4_peak_flops` | `int4_peak` |
 | `weight_overhead_ratio` | `w_ovhd` |
 | `runtime_buffer_ratio` | `rt_buf` |
 | `inst_scale_efficiency` | `inst_eff` |
@@ -327,12 +334,12 @@ $$
 | --- | --- |
 | `gpu_name` | GPU 名称 |
 | `vram_bytes` | 单卡显存，单位 $byte$ |
-| `memory_bandwidth_bytes_per_sec` | HBM 带宽，单位 $byte/s$ |
-| `fp16_flops_per_sec` | FP16 峰值算力，单位 $FLOP/s$ |
-| `bf16_flops_per_sec` | BF16 峰值算力，单位 $FLOP/s$ |
-| `fp8_flops_per_sec` | FP8 峰值算力，单位 $FLOP/s$ |
-| `int8_flops_per_sec` | INT8 峰值算力，单位 $FLOP/s$ |
-| `int4_flops_per_sec` | INT4 / W4A16 峰值算力，单位 $FLOP/s$ |
+| `memory_bandwidth_per_sec` | HBM 带宽，单位 $byte/s$ |
+| `fp16_peak_flops` | FP16 峰值算力，单位 $FLOP/s$ |
+| `bf16_peak_flops` | BF16 峰值算力，单位 $FLOP/s$ |
+| `fp8_peak_flops` | FP8 峰值算力，单位 $FLOP/s$ |
+| `int8_peak_flops` | INT8 峰值算力，单位 $FLOP/s$ |
+| `int4_peak_flops` | INT4 / W4A16 峰值算力，单位 $FLOP/s$ |
 | `memory_bandwidth_efficiency` | 有效带宽折减系数 |
 | `compute_efficiency` | 有效算力折减系数 |
 | `usable_vram_ratio` | 单卡可用显存比例 |
@@ -400,18 +407,18 @@ $$
 
 至少应校验：
 
-- $concurrency\_avg > 0$
-- $concurrency\_peak >= concurrency\_avg$
-- $target\_ttft\_avg\_sec > 0$
-- $target\_ttft\_p95\_sec >= target\_ttft\_avg\_sec$
-- $target\_e2e\_avg\_sec > target\_ttft\_avg\_sec$
-- $target\_e2e\_p95\_sec > target\_ttft\_p95\_sec$
+- `concurrency_avg > 0`
+- `concurrency_peak >= concurrency_avg`
+- `target_ttft_avg_sec > 0`
+- `target_ttft_p95_sec >= target_ttft_avg_sec`
+- `target_e2e_avg_sec > target_ttft_avg_sec`
+- `target_e2e_p95_sec > target_ttft_p95_sec`
 - $0 < decode\_active\_ratio\_avg \le 1$
 - $0 < decode\_active\_ratio\_peak \le 1$
 - $0 < usable\_vram\_ratio \le 1$
 - $\sum request\_shapes.weight = 1$
-- $memory\_bandwidth\_efficiency > 0$
-- $compute\_efficiency > 0$
+- `memory_bandwidth_efficiency > 0`
+- `compute_efficiency > 0`
 
 ### 6.2 从 `request_shapes` 派生全局长度统计
 
@@ -561,13 +568,13 @@ $$
 原始权重字节数：
 
 $$
-M_{weights,raw,bytes} = total\_params\_b \times 10^9 \times bytes\_per\_param(inference\_precision)
+M_{weights,raw} = total\_params\_b \times 10^9 \times bytes\_per\_param(inference\_precision)
 $$
 
 考虑权重格式、量化元数据与布局附加开销后的权重显存：
 
 $$
-M_{weights,bytes} = M_{weights,raw,bytes} \times (1 + weight\_overhead\_ratio)
+M_{weights} = M_{weights,raw} \times (1 + weight\_overhead\_ratio)
 $$
 
 说明：
@@ -580,7 +587,7 @@ $$
 若显式给出：
 
 $$
-E_{cache/token/layer,bytes} = cache\_bytes\_per\_token\_per\_layer
+E_{cache/token/layer} = cache\_bytes\_per\_token\_per\_layer
 $$
 
 否则：
@@ -588,30 +595,30 @@ $$
 - MHA：
 
 $$
-E_{cache/token/layer,bytes} = 2 \times hidden\_size \times bytes\_per\_cache\_element(kv\_cache\_dtype) + cache\_aux\_bytes\_per\_token\_per\_layer
+E_{cache/token/layer} = 2 \times hidden\_size \times bytes\_per\_cache\_element(kv\_cache\_dtype) + cache\_aux\_bytes\_per\_token\_per\_layer
 $$
 
 - GQA：
 
 $$
-E_{cache/token/layer,bytes} = 2 \times num\_kv\_heads \times head\_dim \times bytes\_per\_cache\_element(kv\_cache\_dtype) + cache\_aux\_bytes\_per\_token\_per\_layer
+E_{cache/token/layer} = 2 \times num\_kv\_heads \times head\_dim \times bytes\_per\_cache\_element(kv\_cache\_dtype) + cache\_aux\_bytes\_per\_token\_per\_layer
 $$
 
 - MQA：
 
 $$
-E_{cache/token/layer,bytes} = 2 \times head\_dim \times bytes\_per\_cache\_element(kv\_cache\_dtype) + cache\_aux\_bytes\_per\_token\_per\_layer
+E_{cache/token/layer} = 2 \times head\_dim \times bytes\_per\_cache\_element(kv\_cache\_dtype) + cache\_aux\_bytes\_per\_token\_per\_layer
 $$
 
 - MLA：
 
 $$
-E_{cache/token/layer,bytes} = latent\_cache\_dim \times bytes\_per\_cache\_element(kv\_cache\_dtype) + cache\_aux\_bytes\_per\_token\_per\_layer
+E_{cache/token/layer} = latent\_cache\_dim \times bytes\_per\_cache\_element(kv\_cache\_dtype) + cache\_aux\_bytes\_per\_token\_per\_layer
 $$
 
 - Hybrid Attention：
 
-对不同层类型分别按其对应结构计算 $E_{cache/token/layer,bytes}^{(l)}$，再按层求和；若无法提供逐层结构信息，则必须直接输入 `cache_bytes_per_token_per_layer`。
+对不同层类型分别按其对应结构计算 $E_{cache/token/layer}^{(l)}$，再按层求和；若无法提供逐层结构信息，则必须直接输入 `cache_bytes_per_token_per_layer`。
 
 注：若实现上将 MQA 统一为 $num\_kv\_heads = 1$ 的 GQA 特例，也可复用 GQA 公式，但必须显式满足 $num\_kv\_heads = 1$。
 
@@ -620,19 +627,19 @@ $$
 对给定序列长度 $S$：
 
 $$
-M_{cache,req,bytes}(S) = num\_layers \times S \times E_{cache/token/layer,bytes}
+M_{cache,req}(S) = num\_layers \times S \times E_{cache/token/layer}
 $$
 
 若为 Hybrid Attention 且使用逐层求和，则：
 
 $$
-M_{cache,req,bytes}(S) = S \times \sum_{l=1}^{num\_layers} E_{cache/token/layer,bytes}^{(l)}
+M_{cache,req}(S) = S \times \sum_{l=1}^{num\_layers} E_{cache/token/layer}^{(l)}
 $$
 
 ### 8.4 运行时固定显存
 
 $$
-M_{runtime,bytes} = runtime\_buffer\_ratio \times M_{weights,bytes}
+M_{runtime} = runtime\_buffer\_ratio \times M_{weights}
 $$
 
 ### 8.5 单实例总显存组成
@@ -640,14 +647,14 @@ $$
 单实例显存由三部分组成：
 
 $$
-M_{inst,total,bytes} = M_{weights,bytes} + M_{runtime,bytes} + M_{cache,active,bytes}
+M_{inst,total} = M_{weights} + M_{runtime} + M_{cache,active}
 $$
 
 其中：
 
-- $M_{weights,bytes}$：权重静态驻留显存
-- $M_{runtime,bytes}$：运行时长期固定显存
-- $M_{cache,active,bytes}$：活跃请求占用的 cache 显存
+- $M_{weights}$：权重静态驻留显存
+- $M_{runtime}$：运行时长期固定显存
+- $M_{cache,active}$：活跃请求占用的 cache 显存
 
 采购前 sizing 中，后续通过单实例 cache 容量上限反推可承载请求数，而不在此处预设单实例请求数符号。
 
@@ -658,13 +665,13 @@ $$
 当 $instance\_gpus = 1$ 时，单实例可用显存为：
 
 $$
-M_{usable/inst,bytes} = vram\_bytes \times usable\_vram\_ratio
+M_{usable/inst} = vram\_bytes \times usable\_vram\_ratio
 $$
 
 若：
 
 $$
-M_{weights,bytes} + M_{runtime,bytes} \ge M_{usable/inst,bytes}
+M_{weights} + M_{runtime} \ge M_{usable/inst}
 $$
 
 则单卡完整装载不可行。
@@ -672,7 +679,7 @@ $$
 单实例可承载 cache 容量：
 
 $$
-M_{cache,cap/inst,bytes} = M_{usable/inst,bytes} - M_{weights,bytes} - M_{runtime,bytes}
+M_{cache,cap/inst} = M_{usable/inst} - M_{weights} - M_{runtime}
 $$
 
 该场景下：
@@ -685,13 +692,13 @@ $$
 当 $instance\_gpus > 1$ 时，本文在前期 sizing 中采用**实例级 pooled/sharded 可行性上界**近似：
 
 $$
-M_{usable/inst,bytes} = instance\_gpus \times vram\_bytes \times usable\_vram\_ratio
+M_{usable/inst} = instance\_gpus \times vram\_bytes \times usable\_vram\_ratio
 $$
 
 若：
 
 $$
-M_{weights,bytes} + M_{runtime,bytes} \ge M_{usable/inst,bytes}
+M_{weights} + M_{runtime} \ge M_{usable/inst}
 $$
 
 则当前 $instance\_gpus$ 方案不可行。
@@ -699,7 +706,7 @@ $$
 单实例可承载 cache 容量：
 
 $$
-M_{cache,cap/inst,bytes} = M_{usable/inst,bytes} - M_{weights,bytes} - M_{runtime,bytes}
+M_{cache,cap/inst} = M_{usable/inst} - M_{weights} - M_{runtime}
 $$
 
 该场景下：
@@ -742,24 +749,24 @@ $$
 flops_{decode/token} = 2 \times active\_params
 $$
 
-其中 $peak\_compute\_flops\_per\_sec(inference\_precision)$ 按推理精度选择：
+其中 $peak\_compute\_flops(inference\_precision)$ 按推理精度选择：
 
-- FP16 $\rightarrow fp16\_flops\_per\_sec$
-- BF16 $\rightarrow bf16\_flops\_per\_sec$
-- FP8 $\rightarrow fp8\_flops\_per\_sec$
-- INT8 $\rightarrow int8\_flops\_per\_sec$
-- INT4 / W4A16 $\rightarrow int4\_flops\_per\_sec$
+- FP16 $\rightarrow fp16\_peak\_flops$
+- BF16 $\rightarrow bf16\_peak\_flops$
+- FP8 $\rightarrow fp8\_peak\_flops$
+- INT8 $\rightarrow int8\_peak\_flops$
+- INT4 / W4A16 $\rightarrow int4\_peak\_flops$
 
 内存受限近似：
 
 $$
-TPS_{decode,memory}^{gpu} = \frac{memory\_bandwidth\_bytes\_per\_sec \times memory\_bandwidth\_efficiency}{bytes_{decode/token}}
+TPS_{decode,memory}^{gpu} = \frac{memory\_bandwidth\_per\_sec \times memory\_bandwidth\_efficiency}{bytes_{decode/token}}
 $$
 
 算力受限近似：
 
 $$
-TPS_{decode,compute}^{gpu} = \frac{peak\_compute\_flops\_per\_sec(inference\_precision) \times compute\_efficiency}{flops_{decode/token}}
+TPS_{decode,compute}^{gpu} = \frac{peak\_compute\_flops(inference\_precision) \times compute\_efficiency}{flops_{decode/token}}
 $$
 
 单 GPU decode 吞吐：
@@ -799,7 +806,7 @@ $$
 内存受限上界：
 
 $$
-TPS_{prefill,memory}^{gpu} = \frac{memory\_bandwidth\_bytes\_per\_sec \times memory\_bandwidth\_efficiency}{bytes_{prefill/token}}
+TPS_{prefill,memory}^{gpu} = \frac{memory\_bandwidth\_per\_sec \times memory\_bandwidth\_efficiency}{bytes_{prefill/token}}
 $$
 
 单 token 近似计算量：
@@ -811,7 +818,7 @@ $$
 算力受限上界：
 
 $$
-TPS_{prefill,compute}^{gpu} = \frac{peak\_compute\_flops\_per\_sec(inference\_precision) \times compute\_efficiency}{flops_{prefill/token}}
+TPS_{prefill,compute}^{gpu} = \frac{peak\_compute\_flops(inference\_precision) \times compute\_efficiency}{flops_{prefill/token}}
 $$
 
 单 GPU prefill 吞吐：
@@ -845,7 +852,7 @@ $$
 
 从 $instance\_gpus = 1$ 开始，依次检查：
 
-1. 显存是否可容纳 $M_{weights,bytes} + M_{runtime,bytes}$
+1. 显存是否可容纳 $M_{weights} + M_{runtime}$
 2. 单实例显存是否足够承载目标请求数对应的 cache
 3. 单实例 prefill / decode 吞吐是否满足需求
 
@@ -911,7 +918,7 @@ $$
 先计算单实例在峰值保守场景下可承载的请求数：
 
 $$
-N_{req/inst,mem}^{max} = \left\lfloor \frac{M_{cache,cap/inst,bytes}}{M_{cache,req,bytes}(S_{p95})} \right\rfloor
+N_{req/inst,mem}^{max} = \left\lfloor \frac{M_{cache,cap/inst}}{M_{cache,req}(S_{p95})} \right\rfloor
 $$
 
 若：
