@@ -30,8 +30,6 @@
 - 核心用途是**采购前 GPU 资源预估**
 - 用户不需要预先给出“单卡完整装载”还是“多卡分片装载”
 - 这些是部署测算过程中的**自动推断结果**，而不是用户输入
-- 文中的 prefill、decode、显存、HA 等模型均是**工程近似模型**
-- 若后续获得 profiling、benchmark 或线上观测，应优先以实测值回填关键参数
 
 ---
 
@@ -49,11 +47,11 @@
 
 ### 2.2 方法边界
 
-本文属于**容量规划方法**，不等价于线上精确 SLA 保证，也不等价于特定框架 benchmark。以下内容默认采用工程近似：
+本文属于**容量规划方法**，不等价于线上精确 SLA 保证或框架 benchmark。以下内容默认采用工程近似：
 
 1. 横向扩副本时吞吐近似线性增长。
 2. 单实例内部 TP / EP / PP 的通信开销只通过实例级扩展效率近似吸收，不做精细链路建模。
-3. Prefill 吞吐在缺少到达率、批处理轨迹与序列级 profiling 时，采用**保守代理模型或实测输入**，不将其表述为严格机理模型。
+3. Prefill 吞吐在缺少到达率信息时采用保守上界近似。
 4. 平均 / P95 对话时延反推属于 sanity check，不构成 SLA 证明。
 5. 多维 P95 长度拼装属于保守 sizing，而非严格联合分布建模。
 6. 多卡实例的显存可行性，在采购前阶段按**实例级 pooled/sharded 可行性上界**处理，不等价于 replicated 多卡实例的严格显存证明。
@@ -62,10 +60,9 @@
 若需要更高精度建模，应补充：
 
 - 多卡实例内通信拓扑与并行方式
-- 请求到达率、burst 窗口与排队行为
+- 请求到达率与 burst 窗口
 - request shape 联合分布
 - 真实线上 profiling 或 benchmark 数据
-- 框架对 prefill / decode 的分阶段实测吞吐
 
 ---
 
@@ -162,11 +159,11 @@ flowchart LR
 
 除最终展示外，全文中间计算统一采用：
 
-- 存储与显存相关的 $M_*$ 默认单位为 $byte$
-- 带宽相关的量默认单位为 $byte/s$
-- token 长度与吞吐相关的量默认单位为 $token$、$token/s$
-- 计算量与算力相关的量默认单位为 $FLOP$、$FLOP/s$
-- 时间默认单位为 $second$
+- 存储与显存相关的 $M_*$ 默认单位为 $byte$。
+- 带宽相关的量默认单位为 $byte/s$。
+- token 长度与吞吐相关的量默认单位为 $token$、$token/s$。
+- 计算量与算力相关的量默认单位为 $FLOP$、$FLOP/s$。
+- 时间默认单位为 $second$。
 
 辅助函数只用于承载**确定映射**，不吸收任何经验假设：
 
@@ -186,6 +183,42 @@ flowchart LR
 - $C_{peak}$：峰值活跃并发
 - $r_{decode,avg}$：平均窗口 decode-active 比例
 - $r_{decode,peak}$：峰值窗口 decode-active 比例
+
+### 4.6 工程实现中的建议字段别名
+
+为便于落地为配置文件、脚本或服务接口，建议在工程实现中使用更短的字段别名；文档正文仍保留可读性更高的正式记号。
+
+| 正式记号 / 字段 | 建议工程别名 |
+| --- | --- |
+| `concurrency_avg` | `cc_avg` |
+| `concurrency_peak` | `cc_peak` |
+| `target_ttft_avg_sec` | `ttft_avg_s` |
+| `target_ttft_p95_sec` | `ttft_p95_s` |
+| `target_e2e_avg_sec` | `e2e_avg_s` |
+| `target_e2e_p95_sec` | `e2e_p95_s` |
+| `target_total_tokens_p95` | `tok_p95` |
+| `decode_active_ratio_avg` | `dec_act_avg` |
+| `decode_active_ratio_peak` | `dec_act_peak` |
+| `memory_bandwidth_efficiency` | `bw_eff` |
+| `compute_efficiency` | `cmp_eff` |
+| `usable_vram_ratio` | `vram_use` |
+| `memory_bandwidth_per_sec` | `bw_peak` |
+| `fp16_peak_flops` | `fp16_peak` |
+| `bf16_peak_flops` | `bf16_peak` |
+| `fp8_peak_flops` | `fp8_peak` |
+| `int8_peak_flops` | `int8_peak` |
+| `int4_peak_flops` | `int4_peak` |
+| `weight_overhead_ratio` | `w_ovhd` |
+| `runtime_buffer_ratio` | `rt_buf` |
+| `inst_scale_efficiency` | `inst_eff` |
+| `instance_gpus` | `gpus_per_inst` |
+| `instance_count` | `inst_cnt` |
+| `failure_unit_gpus` | `fail_unit_gpus` |
+
+说明：
+
+- 正式文档、评审材料与对外交付建议继续使用正式字段名。
+- 工程别名只用于配置、代码与可视化表格，不应改变公式含义。
 
 ---
 
@@ -244,7 +277,7 @@ flowchart LR
 约束：
 
 - 所有 $weight_i > 0$
-- $\sum_i weight_i = 1$
+- $\sum weight_i = 1$
 - 每个 shape 至少包含 `name / weight / input_tokens_avg / input_tokens_p95 / output_tokens_avg / output_tokens_p95`
 
 推荐默认值仅用于跑通首版 sizing；若已有日志，应直接由日志统计产出。
@@ -324,11 +357,8 @@ $$
 | `serving_framework` | `vLLM` / `SGLang` / `TensorRT-LLM` / 自研 |
 | `framework_version` | 版本 |
 | `weight_overhead_ratio` | 权重附加显存系数 |
-| `runtime_buffer_ratio` | 运行时常驻显存代理系数 |
+| `runtime_buffer_ratio` | 运行时固定显存系数 |
 | `inst_scale_efficiency` | 多卡实例吞吐扩展效率；单卡实例固定为 $1.0$ |
-| `prefill_model_mode` | `empirical_direct` / `proxy_upper_bound` |
-| `prefill_tokens_per_sec_per_gpu` | 单 GPU prefill 实测吞吐，单位 $token/s$，当 `prefill_model_mode = empirical_direct` 时优先使用 |
-| `prefill_inst_scale_efficiency` | 多卡 prefill 扩展效率；若未单独提供，则默认复用 `inst_scale_efficiency` |
 
 推荐默认值：
 
@@ -336,17 +366,14 @@ $$
 - `runtime_buffer_ratio = 0.10`
 - `inst_scale_efficiency = 1.00`（单卡实例）
 - `inst_scale_efficiency = 0.85`（多卡实例且无实测值时的推荐起点）
-- `prefill_model_mode = empirical_direct`（若有实测值）
-- `prefill_model_mode = proxy_upper_bound`（若无实测值）
 
 说明：
 
 - `weight_overhead_ratio` 只吸收**权重静态装载后**与权重驻留直接相关的额外显存，例如权重格式、量化元数据、内存布局与对齐附加开销。
-- `runtime_buffer_ratio` 用于采购前估算中近似运行时长期常驻显存的代理系数；在缺少框架实测时，暂按权重显存比例锚定，但不表示其真实机理严格正比于权重。
+- `runtime_buffer_ratio` 只吸收**运行时长期占用**的固定显存，例如 workspace、allocator 预留、运行时 buffer 等常驻开销。
 - `usable_vram_ratio` 只吸收 OOM 安全水位、波动预留与运营安全边界，不应与前两者重复计入。
 - `weight_overhead_ratio` 与 `runtime_buffer_ratio` 概念上应显式区分；前者属于权重层附加，后者属于运行时层附加。
-- `inst_scale_efficiency` 仅在 $instance\_gpus > 1$ 时参与 decode 吞吐计算，用于吸收跨卡通信与并行切分导致的非线性扩展损失。
-- Prefill 吞吐若有实测值，应优先直接输入，不建议在有实测条件时继续使用代理模型。
+- `inst_scale_efficiency` 仅在 $instance\_gpus > 1$ 时参与吞吐计算，用于吸收跨卡通信与并行切分导致的非线性扩展损失。
 
 #### 5.5.1 采购前推荐档位
 
@@ -380,48 +407,18 @@ $$
 
 至少应校验：
 
-- $concurrency\_avg > 0$
-- $concurrency\_peak >= concurrency_avg$
-- $target\_ttft\_avg\_sec > 0$
-- $target\_ttft\_p95\_sec >= target\_ttft\_avg\_sec$
-- $target\_e2e\_avg\_sec > target\_ttft\_avg\_sec$
-- $target\_e2e\_p95\_sec > target\_ttft\_p95\_sec$
+- `concurrency_avg > 0`
+- `concurrency_peak >= concurrency_avg`
+- `target_ttft_avg_sec > 0`
+- `target_ttft_p95_sec >= target_ttft_avg_sec`
+- `target_e2e_avg_sec > target_ttft_avg_sec`
+- `target_e2e_p95_sec > target_ttft_p95_sec`
 - $0 < decode\_active\_ratio\_avg \le 1$
 - $0 < decode\_active\_ratio\_peak \le 1$
 - $0 < usable\_vram\_ratio \le 1$
-- $memory\_bandwidth\_efficiency > 0$
-- $compute\_efficiency > 0$
-- $weight\_overhead\_ratio >= 0$
-- $runtime\_buffer\_ratio >= 0$
-- $cache\_aux\_bytes\_per\_token\_per\_layer >= 0$
-- 若显式提供 `cache_bytes_per_token_per_layer`，则其值 $> 0$
-- 所有 $weight_i > 0$
-- $\sum_i weight_i = 1$
-
-结构相关校验：
-
-- 若 $arch\_family = MoE$，则 $activated\_params\_per\_token\_b > 0$
-- 若 $attention\_type = GQA$，则 $num\_kv\_heads > 0$ 且 $head\_dim > 0$
-- 若 $attention\_type = MQA$，则 $head\_dim > 0$
-- 若 $attention\_type = MHA$ 且未直接给定 cache 字节数，建议满足 $num\_heads \times head\_dim = hidden\_size$
-- 若 $attention\_type = MLA$ 且未直给 cache 字节数，则 $latent_cache_dim > 0$
-- 若 $attention\_type = Hybrid$ 且无法逐层给出结构，则必须直接输入 `cache_bytes_per_token_per_layer`
-
-派生预算校验：
-
-- $T_{decode,avg} = target\_e2e\_avg\_sec - target\_ttft\_avg\_sec > 0$
-- $T_{decode,p95}^{budget} = target\_e2e\_p95\_sec - target\_ttft\_p95\_sec > 0$
-- $0 < ttft\_prefill\_share_{avg} \le 1$
-- $0 < ttft\_prefill\_share_{p95} \le 1$
-
-长度边界校验：
-
-- $S_{in,avg} \ge 0$
-- $S_{out,avg} \ge 0$
-- $S_{in,p95} \ge 0$
-- $S_{out,p95} \ge 0$
-- $S_{p95} > 0$
-- $S_{p95} \le max\_context\_window$，若超出则当前输入目标本身不可行
+- $\sum request\_shapes.weight = 1$
+- `memory_bandwidth_efficiency > 0`
+- `compute_efficiency > 0`
 
 ### 6.2 从 `request_shapes` 派生全局长度统计
 
@@ -437,21 +434,17 @@ $$
 S_{out,avg} = \sum_i (w_i \times S_{out,avg,i})
 $$
 
-### 6.3 P95 长度聚合规则
+全局 P95 输入与输出长度：
 
-有原始请求样本时，优先直接从样本统计得到：
+- 若有原始离散桶分布，可按累计分位近似求取。
+- 若仅有少量离散 shape，工程上可取“高位主导 shape”的保守近似。
+
+记最终派生结果为：
 
 - $S_{in,p95}$
 - $S_{out,p95}$
 
-若只有分桶或离散 shape，可采用以下规则：
-
-1. 对输入长度按桶权重做累计分布，取累计权重首次达到或超过 $95%$ 的对应长度，得到 $S_{in,p95}$。
-2. 对输出长度按桶权重做累计分布，取累计权重首次达到或超过 $95%$ 的对应长度，得到 $S_{out,p95}$。
-3. 若只有极少数典型 shape，且无法做更细累计分布，则可取“累计权重首次超过 $95%$ 的 shape 对应 P95 值”作为近似。
-4. 若仍无法稳定构造分位数，则取所有典型 shape 中的最大 P95 值作为保守近似。
-
-### 6.4 总长度 P95
+### 6.3 总长度 P95
 
 优先顺序：
 
@@ -462,7 +455,7 @@ $$
 S_{p95} = S_{in,p95} + S_{out,p95}
 $$
 
-### 6.5 基础总长度
+### 6.4 基础总长度
 
 平均总长度：
 
@@ -605,10 +598,6 @@ $$
 E_{cache/token/layer} = 2 \times hidden\_size \times bytes\_per\_cache\_element(kv\_cache\_dtype) + cache\_aux\_bytes\_per\_token\_per\_layer
 $$
 
-注意：
-- 前提是：$num\_heads \times head\_dim = hidden\_size$
-- 若模型实现不满足该关系，应改用基于 head 的显式公式或直接输入 `cache_bytes_per_token_per_layer`。
-
 - GQA：
 
 $$
@@ -626,8 +615,6 @@ $$
 $$
 E_{cache/token/layer} = latent\_cache\_dim \times bytes\_per\_cache\_element(kv\_cache\_dtype) + cache\_aux\_bytes\_per\_token\_per\_layer
 $$
-
-说明：MLA 公式只作为缺省近似；若框架或模型实现可直接给出实测 cache 字节数，应优先直接输入。
 
 - Hybrid Attention：
 
@@ -649,18 +636,11 @@ $$
 M_{cache,req}(S) = S \times \sum_{l=1}^{num\_layers} E_{cache/token/layer}^{(l)}
 $$
 
-### 8.4 运行时常驻显存
+### 8.4 运行时固定显存
 
 $$
 M_{runtime} = runtime\_buffer\_ratio \times M_{weights}
 $$
-
-说明：
-
-- 该式是采购前 sizing 中用于近似运行时长期常驻显存的代理模型。
-- 它的数学锚点取权重显存，是因为在缺少框架实测时，权重规模常可作为运行时常驻显存规模的一阶参考。
-- 该式不表示运行时显存的真实机理严格按权重显存正比变化。
-- 若框架实测可直接给出稳定常驻 runtime 占用，应优先用实测值替换该代理模型。
 
 ### 8.5 单实例总显存组成
 
@@ -673,7 +653,7 @@ $$
 其中：
 
 - $M_{weights}$：权重静态驻留显存
-- $M_{runtime}$：运行时长期常驻显存
+- $M_{runtime}$：运行时长期固定显存
 - $M_{cache,active}$：活跃请求占用的 cache 显存
 
 采购前 sizing 中，后续通过单实例 cache 容量上限反推可承载请求数，而不在此处预设单实例请求数符号。
@@ -817,57 +797,31 @@ $$
 
 ### 9.3 Prefill 单实例吞吐
 
-Prefill 与 decode 的性能机理并不相同。Prefill 吞吐通常显著受以下因素共同影响：
-
-- 输入序列长度
-- attention 复杂度
-- 批处理形态与 batching 策略
-- 框架实现与 kernel
-- 多卡并行方式
-
-因此，本文不将 prefill 吞吐写成与 decode 同等地位的机理公式，而采用以下优先级：
-
-#### 9.3.1 优先方案：直接输入实测 prefill 吞吐
-
-若已有框架或压测实测，可直接输入单 GPU prefill 吞吐：
+先定义基线单 token 访存量：
 
 $$
-TPS_{prefill}^{gpu} = prefill\_tokens\_per\_sec\_per\_gpu
+bytes_{prefill/token} = active\_params \times bytes\_per\_param(inference\_precision)
 $$
 
-单实例 prefill 吞吐为：
+内存受限上界：
 
 $$
-TPS_{prefill}^{inst} = instance\_gpus \times TPS_{prefill}^{gpu} \times prefill\_inst\_scale\_efficiency
+TPS_{prefill,memory}^{gpu} = \frac{memory\_bandwidth\_per\_sec \times memory\_bandwidth\_efficiency}{bytes_{prefill/token}}
 $$
 
-若未单独提供 `prefill_inst_scale_efficiency`，则默认：
+单 token 近似计算量：
 
 $$
-prefill\_inst\_scale\_efficiency = inst\_scale\_efficiency
+flops_{prefill/token} = 2 \times active\_params
 $$
 
-#### 9.3.2 备选方案：采购前代理上界模型
-
-若缺少实测值，可使用保守代理模型。先定义代理基线：
+算力受限上界：
 
 $$
-bytes_{prefill/proxy\_token} = active\_params \times bytes\_per\_param(inference\_precision)
+TPS_{prefill,compute}^{gpu} = \frac{peak\_compute\_flops(inference\_precision) \times compute\_efficiency}{flops_{prefill/token}}
 $$
 
-$$
-flops_{prefill/proxy\_token} = 2 \times active\_params
-$$
-
-则：
-
-$$
-TPS_{prefill,memory}^{gpu} = \frac{memory\_bandwidth\_per\_sec \times memory\_bandwidth\_efficiency}{bytes_{prefill/proxy\_token}}
-$$
-
-$$
-TPS_{prefill,compute}^{gpu} = \frac{peak\_compute\_flops(inference\_precision) \times compute\_efficiency}{flops_{prefill/proxy\_token}}
-$$
+单 GPU prefill 吞吐：
 
 $$
 TPS_{prefill}^{gpu} = \min(TPS_{prefill,memory}^{gpu}, TPS_{prefill,compute}^{gpu})
@@ -876,15 +830,13 @@ $$
 单实例 prefill 吞吐：
 
 $$
-TPS_{prefill}^{inst} = instance\_gpus \times TPS_{prefill}^{gpu} \times prefill\_inst\_scale\_efficiency
+TPS_{prefill}^{inst} = instance\_gpus \times TPS_{prefill}^{gpu} \times inst\_scale\_efficiency
 $$
 
 说明：
 
-- 该模型只是采购前阶段的**代理上界模型**。
-- 该模型的作用是给出统一、可落地、偏保守的 sizing 输入，不代表 prefill 的真实底层机理。
-- 若后续获得实测值，应优先替换该代理模型。
-- 因为 prefill 对输入长度和 batch 形态更敏感，所以其结果比 decode 模型更需要通过 profiling 或 benchmark 回填。
+- 该模型对 prefill 吞吐给出的是采购前阶段的保守上界近似。
+- 该模型将 prefill 视为不额外享受批内复用折减的保守上界近似。
 
 ---
 
@@ -913,33 +865,17 @@ $$
 
 ### 10.3 第二分支：多卡实例枚举
 
-若单卡不可行，则枚举所有允许的实例卡数集合：
+若单卡不可行，则枚举：
 
 $$
-instance\_gpus \in candidate\_instance\_gpus
+instance\_gpus \in \{2, 4, 8, ...\}
 $$
-
-其中 `candidate_instance_gpus` 由以下约束共同决定：
-
-- 单节点 GPU 数
-- 框架支持的并行粒度
-- 实际可部署的 TP / EP / PP / SP 组合
-- 机房与容器编排约束
-- 故障域与运维约束
-
-若无额外约束，可优先从如下集合起步：
-
-$$
-candidate\_instance\_gpus = {1, 2, 4, 8, ...}
-$$
-
-但不要求必须是 2 的幂，也可以包含 3、6、12、16 等实际可行值。
 
 对每个候选 $instance\_gpus$：
 
-1. 检查显存可行性
-2. 估算 $TPS_{prefill}^{inst}$ 与 $TPS_{decode}^{inst}$
-3. 若当前候选依赖实例级 pooled/sharded 显存上界与跨卡协同吞吐建模，则视为分片方案
+1. 检查显存可行性。
+2. 估算 $TPS_{prefill}^{inst}$ 与 $TPS_{decode}^{inst}$。
+3. 若当前候选依赖实例级 pooled/sharded 显存上界与跨卡协同吞吐建模，则视为分片方案。
 
 若当前候选可行，则：
 
@@ -999,12 +935,6 @@ $$
 N_{inst,memory} = \left\lceil \frac{C_{peak}}{N_{req/inst,mem}^{max}} \right\rceil
 $$
 
-说明：
-
-- 上式相当于假设峰值并发中的每个活跃请求都按 $S_{p95}$ 占满 cache。
-- 因此该算法本质是保守 sizing，而不是统计意义上的精确联合分布建模。
-- 对长尾长度分布明显的业务，该近似可能显著高估显存需求。
-
 ### 11.4 业务实例数与业务 GPU 数
 
 $$
@@ -1026,53 +956,20 @@ $$
 
 ### 12.1 HA 后实例数
 
-- 当 $ha\_mode = none$ 时：
+- $ha\_mode = none$：
 
 $$
 N_{inst,final} = N_{inst,biz}
 $$
 
-- 当 $ha\_mode = N+1$ 时：
-
-$$
-N_{inst,final} = N_{inst,biz} + 1
-$$
-
-- 当 $ha_mode = survive\_failure\_unit$ 时：
+- $ha\_mode = survive\_failure\_unit$：
 
 $$
 N_{inst,final} = N_{inst,biz} + \left\lceil \frac{ha\_target\_units \times failure\_unit\_gpus}{instance\_gpus} \right\rceil
 $$
 
-- 当 $ha_mode = survive_node$ 时，需先计算单节点可容纳的实例数：
-
-$$
-inst\_per\_node = \left\lfloor \frac{node\_gpu\_count}{instance\_gpus} \right\rfloor
-$$
-
-要求：
-
-$$
-inst\_per\_node \ge 1
-$$
-
-若需容忍 `ha_target_units` 个节点故障，则额外实例数为：
-
-$$
-N_{inst,ha,node} = ha\_target\_units \times inst\_per\_node
-$$
-
-于是：
-
-$$
-N_{inst,final} = N_{inst,biz} + N_{inst,ha,node}
-$$
-
-说明：
-
-- `survive_node` 是节点粒度的简化保守规则。
-- 若实际部署存在跨节点绑卡、非整除、反亲和布局或多级故障域，应在落地阶段进一步细化。
-- 若 `instance_gpus > node_gpu_count`，则当前节点规格与实例规格不匹配，方案不可落地。
+- $ha\_mode = survive\_node$：需按节点粒度折算。
+- $ha\_mode = N+1$：可按至少增加 1 个实例处理。
 
 ### 12.2 最终 GPU 数
 
@@ -1153,9 +1050,8 @@ $$
 
 说明：
 
-- 平均 TTFT / E2E 中的 prefill 部分按全部平均活跃并发竞争 prefill 吞吐的保守近似计算。
+- 平均 TTFT / E2E 中的 prefill 部分按全部平均活跃并发竞争 Prefill 吞吐的保守近似计算。
 - 该式是工程近似与 sanity check，不是队列论严格推导。
-- 若 prefill 吞吐采用代理模型，则相关 TTFT 反推结果的不确定性高于 decode 侧。
 
 ### 13.5 保守 P95 时延近似
 
@@ -1188,7 +1084,6 @@ $$
 - `decode_active_ratio_avg` / `decode_active_ratio_peak`
 - 模型 / GPU / 框架 / HA 选择
 - 是否使用默认值及其清单
-- prefill 是否采用实测值或代理模型
 
 ### 14.2 部署求解结果
 
@@ -1268,11 +1163,10 @@ $$
 2. 根据日志窗口统计得到 `decode_active_ratio_avg` 与 `decode_active_ratio_peak`。
 3. 根据模型规格填写模型结构、参数规模与精度。
 4. 根据 GPU 官网规格填写显存、带宽与峰值算力。
-5. 若已有 profiling 或 benchmark，优先填写 `prefill_tokens_per_sec_per_gpu`。
-6. 采用保守 / 中性 / 乐观档位填写 `memory_bandwidth_efficiency`、`compute_efficiency`、`weight_overhead_ratio`、`runtime_buffer_ratio`、`inst_scale_efficiency`，至少保留保守与中性两组结果。
-7. 自动求解最小可行部署方案，得到 $G_{biz}$ 与 $G_{final}$。
-8. 用效果反推结果做 sanity check。
-9. 若后续获得 profiling / benchmark，再回填修正关键效率参数与 prefill 吞吐输入。
+5. 采用保守 / 中性 / 乐观档位填写 `memory_bandwidth_efficiency`、`compute_efficiency`、`weight_overhead_ratio`、`runtime_buffer_ratio`、`inst_scale_efficiency`，至少保留保守与中性两组结果。
+6. 自动求解最小可行部署方案，得到 $G_{biz}$ 与 $G_{final}$。
+7. 用效果反推结果做 sanity check。
+8. 若后续获得 profiling / benchmark，再回填修正关键效率参数。
 
 ### 15.3 最容易误用的点
 
@@ -1281,6 +1175,27 @@ $$
 - 把 `memory_bandwidth_efficiency` / `compute_efficiency` 误认为芯片天生常数。
 - 把 `weight_overhead_ratio` 与 `runtime_buffer_ratio` 混为同一类开销并重复保守。
 - 把多卡 `sharded_upper` 可行性误认为严格部署证明。
-- 把 prefill 代理模型误认为严格机理模型。
 - 把效果反推结果误认为 SLA 保证值。
 - 在中间计算里混用 `GB`、`TFLOP`、`B(十亿参数)` 等展示单位。
+
+---
+
+## 16. 一页式总结
+
+本文最终采用以下主线：
+
+**输入条件 $\rightarrow$ 部署方案求解 $\rightarrow$ 业务 GPU 数 $\rightarrow$ HA 后最终 GPU 数 $\rightarrow$ 基于 GPU 数反推可达到效果**
+
+其中：
+
+- 业务目标输入收敛为并发、TTFT、E2E、`request_shapes`、`decode_active_ratio_avg`、`decode_active_ratio_peak`，并可选补充 `target_total_tokens_p95`。
+- 模型输入定义模型结构、规模与精度。
+- GPU 选择输入同时包含 GPU 理论规格与有效利用率假设。
+- 推理框架 / 部署输入收敛为少量必要档位参数。
+- HA 输入单独定义可用性目标。
+- $instance\_gpus$、$is\_sharded$、$deployment\_mode$、$failure\_unit\_gpus$ 是部署求解结果，而非原始输入。
+- 核心推导中的存储统一用 $byte$，token 统一用 $token$，计算量统一用 $FLOP$，时间统一用 $second$。
+
+因此，本文不是“先假设部署口径，再反推卡数”，而是：
+
+**先给定业务与技术输入，再自动求最小可行部署方案与所需 GPU 数量。**
