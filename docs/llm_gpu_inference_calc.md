@@ -1,5 +1,29 @@
 # 大模型推理 GPU 资源计算原理
 
+---
+
+## GPU 卡数计算原则
+
+在大模型在线推理场景下，GPU 部署规模的测算本质上属于**多资源约束下的容量规划问题**。最终所需 GPU 卡数，不应采用“先根据显存估算最小卡数，再对吞吐和时延进行补充校验”的串行方式确定，而应基于各类关键约束分别建模后统一求解。
+
+具体而言，模型部署规模至少同时受到以下几类约束影响：
+
+* **显存约束**：用于保证模型权重、运行时缓存、KV Cache 及必要的系统开销能够被稳定承载；
+* **Prefill 吞吐约束**：用于保证输入侧 token 处理能力满足首 token 返回时间及输入阶段时延目标；
+* **Decode 吞吐约束**：用于保证输出侧 token 生成能力满足整体生成时延与并发服务目标。
+
+因此，计算过程中应分别基于上述约束，独立求得各自对应的最小 GPU 数量，并将其视为系统在该约束下的资源下界。最终业务最小可行部署规模应取各约束结果中的最大值，即：
+
+**最终所需 GPU 卡数 = max(显存约束卡数, Prefill 吞吐约束卡数, Decode 吞吐约束卡数)**
+
+该计算逻辑能够准确反映在线推理系统“任一关键约束不满足，则整体方案不可行”的基本特征，因而更符合容量规划的数学定义与工程实践。
+
+相较之下，“先按显存估算最小卡数，再校验吞吐是否满足”的方式，可以作为工程实现中的简化求解流程，用于帮助快速判断模型是否具备基本可部署性；但从方法论上看，其本质是对多约束问题的顺序试探，不能完整表达显存、Prefill 吞吐、Decode 吞吐在资源规划中的同级约束关系。因此，在正式技术方案中，建议采用“**分别建模、统一取最大值**”的计算原则，作为 GPU 卡数测算的标准方法。
+
+在得到业务最小可行卡数后，还应进一步结合高可用要求、资源冗余、安全水位、调度损耗以及未来业务增长预留，形成最终推荐部署规模。
+
+---
+
 ## 1. 目标
 
 本文档用于大模型在线推理场景下的 GPU 资源估算，输出：
@@ -12,46 +36,57 @@
 支持：
 
 * Dense / MoE
-* MHA / GQA / MQA / MLA / Sparse
+* MHA / GQA / MQA / MLA / Sparse / Hybrid Attention
 * 基于 GPU 厂商规格参数进行前期估算
+* 基于“平均 / P95 单次对话耗时”进行用户体验建模
 
 整体链路如下：
 
 ```mermaid
 flowchart LR
-    A[体验目标]
-    B[系统吞吐目标]
-    C[显存/吞吐计算]
-    D[GPU数量输出]
+    A[用户体验目标<br>平均/P95 单次对话耗时]
+    B[阶段时间预算<br>TTFT / Decode Budget]
+    C[单请求速度目标<br>Prefill/Decode token/s per request]
+    D[集群总吞吐目标<br>乘以活跃并发]
+    E[显存/吞吐计算]
+    F[GPU数量输出]
 
-    A --> B --> C --> D
+    A --> B --> C --> D --> E --> F
 ```
 
 ---
 
 ## 2. 总体计算链路
 
-整套计算分为三层：
+整套计算分为四层：
 
 ### 第一层：用户体验层
 
 定义用户可感知目标：
 
-* 首 token 延迟 `TTFT`
-* 持续生成速度 `Streaming Speed`
+* P95 首 token 延迟 `TTFT`
+* 平均单次对话总耗时
+* P95 单次对话总耗时
 * 峰值并发 `Peak Concurrency`
-* 输入/输出长度分布
+* 输入 / 输出长度分布
 
-### 第二层：系统吞吐层
+### 第二层：单请求速度层
 
-将体验目标转换为：
+将时延目标转换为：
+
+* 单请求 prefill 速度目标 `R_prefill_req`
+* 单请求 decode 速度目标 `R_decode_req`
+
+### 第三层：系统吞吐层
+
+将单请求速度目标叠加到峰值并发，得到：
 
 * `target_prefill_tps_total`
 * `target_decode_tps_total`
 
-这两项是系统输入约束。
+这两项是系统内部资源计算约束。
 
-### 第三层：资源层
+### 第四层：资源层
 
 结合模型结构、显存公式和 GPU 规格，输出：
 
@@ -60,36 +95,38 @@ flowchart LR
 * `G_decode`
 * `G_final`
 
+> 说明：对外输入参数不再要求用户显式填写 `target_prefill_tps_total` 和 `target_decode_tps_total`。这两个量作为系统内部推导结果保留，用于与底层 GPU 估算公式对接。
+
 ---
 
 ## 3. 输入参数
 
 ### 3.1 模型参数
 
-| 参数                           | 含义                             |
-| ---------------------------- | ------------------------------ |
-| `arch_family`                | Dense / MoE                    |
-| `attention_type`             | MHA / GQA / MQA / MLA / Sparse |
-| `total_params_b`             | 总参数量，单位 B                       |
-| `activated_params_per_token_b` | 每 token 激活参数量，单位 B，MoE 使用      |
-| `num_layers`                 | 层数                             |
-| `hidden_size`                | 隐藏维度                           |
-| `num_heads`                  | Query heads 数                  |
-| `num_kv_heads`               | KV heads 数                     |
-| `head_dim`                   | 每个 head 维度                     |
-| `latent_cache_dim`           | MLA latent cache 维度            |
-| `cache_aux_bytes_per_token_per_layer` | KV Cache 每个 token 的附加开销    |
-| `cache_bytes_per_token_per_layer` | 可直接指定单 token cache 大小，覆盖推导逻辑   |
+| 参数                                    | 含义                                      |
+| ------------------------------------- | --------------------------------------- |
+| `arch_family`                         | Dense / MoE                             |
+| `attention_type`                      | MHA / GQA / MQA / MLA / Sparse / Hybrid |
+| `total_params_b`                      | 总参数量，单位 B                               |
+| `activated_params_per_token_b`        | 每 token 激活参数量，单位 B，MoE 使用               |
+| `num_layers`                          | 层数                                      |
+| `hidden_size`                         | 隐藏维度                                    |
+| `num_heads`                           | Query heads 数                           |
+| `num_kv_heads`                        | KV heads 数                              |
+| `head_dim`                            | 每个 head 维度                              |
+| `latent_cache_dim`                    | MLA latent cache 维度                     |
+| `cache_aux_bytes_per_token_per_layer` | KV Cache 每个 token 的附加开销                 |
+| `cache_bytes_per_token_per_layer`     | 可直接指定单 token cache 大小，覆盖推导逻辑            |
 
 ### 3.2 请求参数
 
-| 参数                         | 含义                   |
-| -------------------------- | -------------------- |
-| `concurrency`              | 同时活跃请求数              |
-| `batch_size_per_request`   | 单个请求的 Batch Size，默认 1 |
-| `request_shapes`           | 请求长度分布               |
-| `target_prefill_tps_total` | 总 prefill token/s 目标 |
-| `target_decode_tps_total`  | 总 decode token/s 目标  |
+| 参数                        | 含义                        |
+| ------------------------- | ------------------------- |
+| `concurrency`             | 当前估算场景下的同时活跃请求数           |
+| `batch_size_per_request`  | 单个请求的 Batch Size，默认 1     |
+| `request_shapes`          | 请求长度分布                    |
+| `target_peak_concurrency` | 峰值并发                      |
+| `decode_active_ratio`     | 峰值并发中处于 decode 阶段的活跃比例，可选 |
 
 其中 `request_shapes` 至少包含：
 
@@ -100,29 +137,36 @@ flowchart LR
 
 ### 3.3 用户体验参数
 
-| 参数                                 | 含义               |
-| ---------------------------------- | ---------------- |
-| `target_ttft_p95_sec`              | P95 首 token 延迟目标 |
-| `target_streaming_speed_p95_floor` | P95 最低生成速度       |
-| `target_peak_concurrency`          | 峰值并发             |
-| `target_input_tokens_avg`          | 平均输入长度           |
-| `target_input_tokens_p95`          | P95 输入长度         |
-| `target_output_tokens_avg`         | 平均输出长度           |
-| `target_output_tokens_p95`         | P95 输出长度         |
+| 参数                         | 含义                    |
+| -------------------------- | --------------------- |
+| `target_ttft_p95_sec`      | P95 首 token 延迟目标      |
+| `target_e2e_avg_sec`       | 平均单次对话总耗时目标           |
+| `target_e2e_p95_sec`       | P95 单次对话总耗时目标         |
+| `target_input_tokens_avg`  | 平均输入长度                |
+| `target_input_tokens_p95`  | P95 输入长度              |
+| `target_output_tokens_avg` | 平均输出长度                |
+| `target_output_tokens_p95` | P95 输出长度              |
+| `target_ttft_avg_sec`      | 平均 TTFT 目标，可选         |
+| `prefill_time_share_avg`   | 平均场景下 prefill 耗时占比，可选 |
+
+> 说明：
+>
+> * 对外默认使用“平均 / P95 单次对话耗时”作为主要输入口径。
+> * 若未显式传入 `target_ttft_avg_sec`，系统可使用 `prefill_time_share_avg × target_e2e_avg_sec` 自动估算平均 prefill 时间预算。
 
 ### 3.4 GPU 参数
 
-| 参数                      | 含义      |
-| ----------------------- | ------- |
-| `gpu_name`              | GPU 名称  |
-| `vram_gb`               | 显存容量，单位 GB |
-| `memory_bandwidth_gb_per_sec` | 显存带宽，单位 GB/s |
-| `fp32_tflops`           | FP32 算力 |
-| `fp16_tflops`           | FP16 算力 |
-| `bf16_tflops`           | BF16 算力 |
-| `fp8_tflops`            | FP8 算力  |
-| `int8_tflops`           | INT8 算力 |
-| `int4_tflops`           | INT4 算力 / W4A16 算力 |
+| 参数                            | 含义                 |
+| ----------------------------- | ------------------ |
+| `gpu_name`                    | GPU 名称             |
+| `vram_gb`                     | 显存容量，单位 GB         |
+| `memory_bandwidth_gb_per_sec` | 显存带宽，单位 GB/s       |
+| `fp32_tflops`                 | FP32 算力            |
+| `fp16_tflops`                 | FP16 算力            |
+| `bf16_tflops`                 | BF16 算力            |
+| `fp8_tflops`                  | FP8 算力             |
+| `int8_tflops`                 | INT8 算力            |
+| `int4_tflops`                 | INT4 算力 / W4A16 算力 |
 
 ### 3.5 高可用参数
 
@@ -132,42 +176,56 @@ flowchart LR
 | `replica_count`          | 多活副本数                                            |
 | `failover_reserve_ratio` | 故障冗余比例                                           |
 
-### 3.6 运行时参数 (Runtime Config)
+### 3.6 运行时参数（Runtime Config）
 
-这类参数**不属于**特定的 LLM 的模型结构或具体的一张显卡白皮书，这主要取决于你的推理引擎（如 vLLM/SGLang）、你选择的量化方案以及你的系统安全边际策略。虽然在当前 Python 的 `dataclasses` 里它们为了传参方便被存放在了模型或显卡的类下，但在规划时应作为独立的全局变量配置。
+这类参数不属于特定 LLM 的模型结构或某一张显卡白皮书，而主要取决于推理引擎（如 vLLM / SGLang）、量化方案以及系统安全边际策略。虽然在当前 Python `dataclasses` 中它们可能被挂在模型或显卡类下，但在规划时应作为独立的全局变量配置。
 
-| 参数 | 挂载对象 | 含义 |
-| :--- | :--- | :--- |
-| `inference_precision`        | 模型配置 | 推理精度；权重字节数与主算力口径由此决定 |
-| `kv_cache_dtype`             | 模型配置 | KV Cache 的数据存储格式 |
-| `weight_overhead_ratio`      | 模型配置 | 模型权重显存膨胀的冗余比例，默认 0.15 |
-| `runtime_overhead_ratio`     | 模型配置 | 运行时上下文等占模型的比例，默认 0.08 |
-| `runtime_overhead_gb`        | 模型配置 | 基础运行时保底显存绝对值，用于 CUDA Context/NCCL 等静态开销，单位 GB，默认 2.0 |
-| `usable_vram_ratio`          | 显卡配置 | 防 OOM 的安全可用显存比例，默认 0.90 |
-| `decode_efficiency`          | 显卡配置 | Decode 阶段基于硬件规格打底的理论折减系数（基于 MBU），默认 0.40 |
-| `prefill_efficiency`         | 显存配置 | Prefill 阶段基于硬件规格打底的理论折减系数（基于 MFU），默认 0.55 |
-| `compute_efficiency`         | 显存配置 | 极限发热/功耗墙等导致的峰值算力折减系数，默认 0.60 |
-| `prefill_memory_reuse_factor`| 显存配置 | Prefill 阶段批处理时显存带宽的虚拟读取放大倍率，默认 24.0 |
-| `framework`                  | 运行环境 | 推理引擎选择 (vLLM / SGLang) |
-| `prefix_cache_hit_rate`      | 运行环境 | 前缀缓存 (Prefix Cache) 命中率，降低 Prefill 耗时 |
+| 参数                            | 挂载对象 | 含义                                                     |
+| ----------------------------- | ---- | ------------------------------------------------------ |
+| `inference_precision`         | 模型配置 | 推理精度；权重字节数与主算力口径由此决定                                   |
+| `kv_cache_dtype`              | 模型配置 | KV Cache 的数据存储格式                                       |
+| `weight_overhead_ratio`       | 模型配置 | 模型权重显存膨胀的冗余比例，默认 0.15                                  |
+| `runtime_overhead_ratio`      | 模型配置 | 运行时上下文等占模型的比例，默认 0.08                                  |
+| `runtime_overhead_gb`         | 模型配置 | 基础运行时保底显存绝对值，用于 CUDA Context / NCCL 等静态开销，单位 GB，默认 2.0 |
+| `usable_vram_ratio`           | 显卡配置 | 防 OOM 的安全可用显存比例，默认 0.90                                |
+| `decode_efficiency`           | 显卡配置 | Decode 阶段基于硬件规格打底的理论折减系数（基于 MBU），默认 0.40               |
+| `prefill_efficiency`          | 显卡配置 | Prefill 阶段基于硬件规格打底的理论折减系数（基于 MFU），默认 0.55              |
+| `compute_efficiency`          | 显卡配置 | 极限发热 / 功耗墙等导致的峰值算力折减系数，默认 0.60                         |
+| `prefill_memory_reuse_factor` | 显卡配置 | Prefill 阶段批处理时显存带宽的虚拟读取放大倍率，默认 24.0                    |
+| `framework`                   | 运行环境 | 推理引擎选择（vLLM / SGLang）                                  |
+| `prefix_cache_hit_rate`       | 运行环境 | 前缀缓存命中率，降低 Prefill 耗时                                  |
+
+### 3.7 兼容参数（专家模式）
+
+为兼容旧版接口或专家用户手动覆盖，仍可保留以下内部参数作为可选输入：
+
+| 参数                         | 含义                     |
+| -------------------------- | ---------------------- |
+| `target_prefill_tps_total` | 系统总 prefill token/s 目标 |
+| `target_decode_tps_total`  | 系统总 decode token/s 目标  |
+
+若这两个参数被显式传入，则系统可跳过第 4 节的自动推导，直接进入第 7 节吞吐约束卡数计算。
 
 ---
 
-## 4. 体验指标到系统指标的映射
+## 4. 用户体验指标到系统指标的映射
 
 这一层的目标，是把用户能直接感知的体验指标，转换成系统容量规划可直接使用的 token/s 目标。
 
-可按两步理解：
+可按三步理解：
 
-1. 先把体验目标拆成 prefill 阶段和 decode 阶段。
-2. 再分别换算成系统总吞吐目标 `target_prefill_tps_total` 与 `target_decode_tps_total`。
+1. 先把单次对话总耗时拆成 prefill 阶段和 decode 阶段。
+2. 再分别换算为单请求 prefill / decode 速度目标。
+3. 最后结合活跃并发，得到系统总吞吐目标 `target_prefill_tps_total` 与 `target_decode_tps_total`。
 
 其中：
 
 * `prefill` 处理输入 prompt，对应首 token 延迟 `TTFT`
 * `decode` 持续生成输出 token，对应流式生成速度 `Streaming Speed`
 
-### 4.1 首 token 延迟
+### 4.1 基本定义
+
+首 token 延迟 (TTFT)：
 
 $$
 TTFT = t_{first_token} - t_{request}
@@ -175,18 +233,78 @@ $$
 
 TTFT 主要受 prefill 能力影响。
 
-设：
+端到端单次对话时延：
 
-* 峰值并发为 $C_{peak}$
+$$
+Latency_{e2e} = t_{last_token} - t_{request}
+$$
+
+近似拆解为：
+
+$$
+Latency_{e2e} \approx T_{prefill} + T_{decode}
+$$
+
+其中：
+
+$$
+T_{prefill} \approx TTFT
+$$
+
+$$
+T_{decode} \approx \frac{S_{out}}{R_{decode,req}}
+$$
+
+这个拆法更贴近用户感知，因为用户实际能感觉到的是：
+
+* 第一个 token 多久出来
+* 后续输出多久生成完
+
+### 4.2 平均场景的时间预算
+
+对于平均场景，设：
+
+* 平均输入长度为 $S_{in,avg}$
+* 平均输出长度为 $S_{out,avg}$
+* 平均单次对话总耗时目标为 $T_{e2e,avg}$
+
+若提供平均 TTFT 目标 `target_ttft_avg_sec`，则：
+
+$$
+T_{prefill,avg} = target_ttft_avg_sec
+$$
+
+$$
+T_{decode,avg} = target_e2e_avg_sec - target_ttft_avg_sec
+$$
+
+若未提供平均 TTFT 目标，则用平均 prefill 耗时占比估算：
+
+$$
+T_{prefill,avg} = prefill_time_share_avg \times target_e2e_avg_sec
+$$
+
+$$
+T_{decode,avg} = target_e2e_avg_sec - T_{prefill,avg}
+$$
+
+### 4.3 P95 场景的时间预算
+
+对于 P95 场景，设：
+
 * P95 输入长度为 $S_{in,p95}$
-* prefill 时间预算为 $T_{prefill_budget}$
+* P95 输出长度为 $S_{out,p95}$
+* P95 单次对话总耗时目标为 $T_{e2e,p95}$
+* P95 TTFT 目标为 $T_{ttft,p95}$
 
 则：
 
 $$
-target\_prefill\_tps\_total
-\approx
-\frac{C_{peak} \times S_{in,p95}}{T_{prefill\_budget}}
+T_{prefill,p95} \approx T_{ttft,p95} = target\_ttft\_p95\_sec
+$$
+
+$$
+T_{decode,p95} = target\_e2e\_p95\_sec - target\_ttft\_p95\_sec
 $$
 
 含义是：
@@ -203,84 +321,151 @@ $$
 
 工程上通常可将 `T_prefill_budget` 视为 TTFT 预算中主要由 prefill 消耗的那部分时间，因此它通常不应大于 `target_ttft_p95_sec`。
 
----
-
-### 4.2 持续生成速度
+工程上需要保证：
 
 $$
-StreamingSpeed = \frac{N_{output\_tokens}}{t_{last\_token} - t_{first\_token}}
+T_{decode,p95} > 0
 $$
+
+若 `target_e2e_p95_sec <= target_ttft_p95_sec`，则参数本身不成立，应直接报错或提示用户修正。
+
+### 4.4 从时间预算推导单请求速度目标
+
+#### 平均场景
+
+Prefill 单请求目标速度：
+
+$$
+R_{prefill,req}^{avg} = \frac{S_{in,avg}}{T_{prefill,avg}}
+$$
+
+Decode 单请求目标速度：
+
+$$
+R_{decode,req}^{avg} = \frac{S_{out,avg}}{T_{decode,avg}}
+$$
+
+#### P95 场景
+
+Prefill 单请求目标速度：
+
+$$
+R_{prefill,req}^{p95} = \frac{S_{in,p95}}{T_{prefill,p95}}
+$$
+
+Decode 单请求目标速度：
+
+$$
+R_{decode,req}^{p95} = \frac{S_{out,p95}}{T_{decode,p95}}
+$$
+
+### 4.5 从单请求速度目标推导系统总吞吐目标
 
 设：
 
-* 活跃生成请求数为 $C_{decode}$
-* 单请求最低生成速度为 $R_{decode}$
+* 峰值并发为 $C_{peak}$
+* 同时处于 decode 阶段的活跃比例为 $r_{decode_active}$
 
-则：
-
-$$
-target\_decode\_tps\_total = C_{decode} \times R_{decode}
-$$
-
-含义是：
-
-* `C_decode` 不是总并发，而是同一时刻正在生成输出的活跃请求数
-* `R_decode` 是单请求最低生成速度，例如 `20 token/s`
-
-因此：
-
-* 如果同时有 `C_decode` 个请求都要满足最低生成速度
-* 系统总 decode 吞吐就至少要达到 `C_decode x R_decode`
-
-在容量规划里，`C_decode` 往往小于 `C_peak`，因为并不是所有活跃请求都同时处于 decode 阶段；如果没有更细的业务分阶段统计，可先用一个保守比例从峰值并发估算。
-
----
-
-### 4.3 端到端时延校验
+则 decode 活跃请求数为：
 
 $$
-Latency_{e2e} = t_{last\_token} - t_{request}
+C_{decode} = C_{peak} \times r_{decode_active}
 $$
 
-可近似校验为：
+#### 系统总 prefill 吞吐目标
+
+保守起见，prefill 吞吐一般按峰值并发同时触发估计：
 
 $$
-Latency_{e2e}
-\approx
-TTFT + \frac{S_{out}}{StreamingSpeed}
+target\_prefill\_tps\_total = C_{peak} \times R_{prefill,req}^{p95}
 $$
 
-也就是说，体验目标到系统吞吐目标的转换关系可以概括为：
+代入得：
 
-* `TTFT -> target_prefill_tps_total`
-* `Streaming Speed -> target_decode_tps_total`
+$$
+target\_prefill\_tps\_total \approx \frac{C_{peak} \times S_{in,p95}}{T_{prefill,p95}}
+$$
 
-一个简单示例：
+#### 系统总 decode 吞吐目标
+
+Decode 吞吐按活跃生成请求估计：
+
+$$
+target\_decode\_tps\_total = C_{decode} \times R_{decode,req}^{p95}
+$$
+
+代入得：
+
+$$
+target\_decode\_tps\_total \approx \frac{C_{peak} \times r_{decode\_active} \times S_{out,p95}}{T_{decode,p95}}
+$$
+
+### 4.6 端到端时延校验
+
+系统推导完成后，可反向校验：
+
+$$
+Latency_{e2e}^{avg} \approx \frac{S_{in,avg}}{R_{prefill,req}^{avg}} + \frac{S_{out,avg}}{R_{decode,req}^{avg}}
+$$
+
+$$
+Latency_{e2e}^{p95} \approx \frac{S_{in,p95}}{R_{prefill,req}^{p95}} + \frac{S_{out,p95}}{R_{decode,req}^{p95}}
+$$
+
+这一步的作用是验证：由“用户耗时目标”自动推导出来的内部吞吐要求，是否与预期体验一致。
+
+### 4.7 示例
+
+设：
 
 * 峰值并发 `C_peak = 200`
+* decode 活跃比例 `r_decode_active = 0.6`
 * P95 输入长度 `S_in,p95 = 4000`
-* prefill 时间预算 `T_prefill_budget = 2s`
-* 活跃生成请求数 `C_decode = 120`
-* 单请求最低生成速度 `R_decode = 20 token/s`
+* P95 输出长度 `S_out,p95 = 260`
+* P95 首 token 耗时目标 `T_ttft,p95 = 2s`
+* P95 单次对话总耗时目标 `T_e2e,p95 = 15s`
 
 则：
 
 $$
-target\_prefill\_tps\_total
-\approx
-\frac{200 \times 4000}{2}
-= 400000 \ token/s
+T_{prefill,p95} = 2s
 $$
 
 $$
-target\_decode\_tps\_total
-= 120 \times 20
-= 2400 \ token/s
+T_{decode,p95} = 15 - 2 = 13s
 $$
 
-这两个量随后会分别进入后续的 `G_prefill` 和 `G_decode` 计算，最终与显存约束一起决定 GPU 数量。
+Prefill 单请求目标速度：
 
-> ⚠️ **工程实现提示**：`gpu_sizing.py` 和当前 UI 都支持显式输入 `target_prefill_tps_total` / `target_decode_tps_total`。Gradio 页面仍会基于预设画像给出默认值（例如 `concurrency * 500` 作为默认总 prefill TPS），但这两个值现在可以直接手动覆盖。与此同时，请求画像中的 Token 分布调整仍主要影响显存估算（即 $M_{sizing}$）；如果你的业务吞吐目标随画像变化，需要同步修改这两个 TPS 参数。
+$$
+R_{prefill,req}^{p95} = \frac{4000}{2} = 2000\ token/s
+$$
+
+Decode 单请求目标速度：
+
+$$
+R_{decode,req}^{p95} = \frac{260}{13} = 20\ token/s
+$$
+
+Decode 活跃请求数：
+
+$$
+C_{decode} = 200 \times 0.6 = 120
+$$
+
+系统总 prefill 吞吐目标：
+
+$$
+target_prefill_tps_total = 200 \times 2000 = 400000\ token/s
+$$
+
+系统总 decode 吞吐目标：
+
+$$
+target_decode_tps_total = 120 \times 20 = 2400\ token/s
+$$
+
+这两个量随后进入后续的 `G_prefill` 和 `G_decode` 计算，最终与显存约束一起决定 GPU 数量。
 
 ---
 
@@ -513,7 +698,7 @@ $$
 
 ## 6. 请求长度分布
 
-设共有 (K) 类请求，第 (i) 类请求占比为 (p_i)，满足：
+设共有 $K$ 类请求，第 $i$ 类请求占比为 $p_i$，满足：
 
 $$
 \sum_{i=1}^{K} p_i = 1
@@ -543,13 +728,34 @@ $$
 E[S] = \sum_{i=1}^{K} p_i \cdot S_i
 $$
 
+### P95 输入长度
+
+将请求按输入长度从小到大排序，累计占比达到 95% 时对应长度记为：
+
+$$
+S_{in,p95}
+$$
+
+### P95 输出长度
+
+将请求按输出长度从小到大排序，累计占比达到 95% 时对应长度记为：
+
+$$
+S_{out,p95}
+$$
+
 ### P95 总长度
 
-将请求按 (S_i) 从小到大排序，累计占比达到 95% 时对应长度记为：
+将请求按总长度从小到大排序，累计占比达到 95% 时对应长度记为：
 
 $$
 S_{p95}
 $$
+
+> 建议：
+>
+> * 第 4 节的吞吐时间预算计算优先使用 `S_in,p95` 和 `S_out,p95`。
+> * 第 5 节的显存 sizing 优先使用总长度 `S_p95`。
 
 ---
 
@@ -560,7 +766,7 @@ $$
 ### 7.1 Decode 吞吐
 
 $$
-TPS_{decode}^{spec} = \min(TPS_{decode,bandwidth},\ TPS_{decode,compute}) \times r_{decode\_eff} \times (1.15 \text{ if SGLang})
+TPS_{decode}^{spec} = \min(TPS_{decode,bandwidth},\ TPS_{decode,compute}) \times r_{decode\_eff} \times (1.15\ \text{ if SGLang})
 $$
 
 #### 理论与数据来源
@@ -608,14 +814,20 @@ $$
 * BF16：`bf16_tflops`
 * FP8：`fp8_tflops`
 * INT8：`int8_tflops`
-* INT4：若未显式提供 `int4_tflops`，可降级取 `int8_tflops`（当前代码约定的算力回退机制）。
+* INT4：若未显式提供 `int4_tflops`，可降级取 `int8_tflops`
+
+> 💡 架构优势洞察：
+>
+> * 在长上下文且高并发场景下，传统 GQA / MHA 的 KV Cache 访存成本会迅速增长，导致 Decode 吞吐下滑。
+> * MLA 通过显著压缩 Cache 体积，可有效减轻 Decode 阶段的访存瓶颈。
+> * 线性注意力类架构因隐状态大小不随上下文增长，在极长文本下吞吐衰减更轻。
 
 ---
 
 ### 7.2 Prefill 吞吐
 
 $$
-TPS_{prefill}^{spec} = \min(TPS_{prefill,compute},\ TPS_{prefill,memory}) \times r_{prefill\_eff} \times (1.10 \text{ if SGLang})
+TPS_{prefill}^{spec} = \min(TPS_{prefill,compute},\ TPS_{prefill,memory}) \times r_{prefill\_eff} \times (1.10\ \text{if SGLang})
 $$
 
 #### 理论与数据来源
@@ -741,11 +953,16 @@ $$
 * `G_decode`
 * `G_biz`
 * `G_final`
-* `TPS_decode_cluster = G_biz x TPS_decode_per_gpu`
-* `TPS_prefill_cluster = G_biz x TPS_prefill_per_gpu`
-* `DailyDecodeTokensMax = TPS_decode_cluster x 86400`
-* `DailyPrefillTokensMax = TPS_prefill_cluster x 86400`
-* `AvgConversationDurationSec ≈ avg_input_tokens / (TPS_prefill_cluster / concurrency) + avg_output_tokens / (TPS_decode_cluster / concurrency)`
+* `TPS_decode_cluster = G_biz × TPS_decode_per_gpu`
+* `TPS_prefill_cluster = G_biz × TPS_prefill_per_gpu`
+* `DailyDecodeTokensMax = TPS_decode_cluster × 86400`
+* `DailyPrefillTokensMax = TPS_prefill_cluster × 86400`
+* `AvgConversationDurationSec`
+* `P95ConversationDurationSec`
+* `DerivedTargetPrefillTPS`
+* `DerivedTargetDecodeTPS`
+* `PrefillReqRateAvg/P95`
+* `DecodeReqRateAvg/P95`
 
 其中：
 
@@ -757,21 +974,45 @@ $$
 G_{final} = G_{biz} + G_{HA}
 $$
 
-这里的每日 token 上限建议按业务基线卡数 `G_biz` 计算，而不是按 `G_final` 计算。原因是 `G_final` 中的 HA 冗余卡在主备、N+1 等模式下并不等价于新增可售卖产能；若直接按采购总卡数折算，会高估系统每日可供给 token。
+### 9.1 每日 token 上限
 
-平均一次对话耗时同样建议按 `G_biz` 口径估算，并采用近似拆解：
+每日 token 上限建议按业务基线卡数 `G_biz` 计算，而不是按 `G_final` 计算。原因是 `G_final` 中的 HA 冗余卡在主备、N+1 等模式下并不等价于新增可售卖产能；若直接按采购总卡数折算，会高估系统每日可供给 token。
 
-* `平均输入 token / 单请求 prefill 速度`
-* `平均输出 token / 单请求 decode 速度`
+### 9.2 平均一次对话耗时估算
 
-其中单请求速度由当前业务基线卡数下的集群总能力，再除以当前并发数得到。这个值用于快速判断“在这组卡数下，大致一轮平均请求要多久”，是容量规划近似值，不等价于线上严格的 P95/P99 时延承诺。
+平均一次对话耗时建议按 `G_biz` 口径估算，并采用近似拆解：
 
-为了便于校验，工程输出建议同时附带“计算过程”明细，至少覆盖以下四组信息：
+$$
+AvgConversationDurationSec
+\approx
+\frac{avg\_input\_tokens}{TPS_{prefill\_cluster} / concurrency}
++
+\frac{avg\_output\_tokens}{TPS_{decode\_cluster} / concurrency}
+$$
 
-* 请求画像统计：`avg_input_tokens`、`avg_output_tokens`、`avg_total_tokens`、`p95_total_tokens`
+### 9.3 P95 一次对话耗时估算
+
+P95 一次对话耗时可近似校验为：
+
+$$
+P95ConversationDurationSec
+\approx
+\frac{p95\_input\_tokens}{TPS_{prefill\_cluster} / target\_peak\_concurrency}
++
+\frac{p95\_output\_tokens}{TPS_{decode\_cluster} / (target\_peak\_concurrency \times decode\_active\_ratio)}
+$$
+
+这两个值是容量规划近似值，用于快速判断“在这组卡数下，大致一轮请求要多久”，不等价于线上严格的 P95 / P99 时延承诺。
+
+### 9.4 过程明细输出建议
+
+为了便于校验，工程输出建议同时附带“计算过程”明细，至少覆盖以下五组信息：
+
+* 请求画像统计：`avg_input_tokens`、`avg_output_tokens`、`p95_input_tokens`、`p95_output_tokens`、`p95_total_tokens`
+* 时间预算推导：`T_prefill_avg`、`T_decode_avg`、`T_prefill_p95`、`T_decode_p95`
+* 速度目标推导：`R_prefill_req_avg/p95`、`R_decode_req_avg/p95`、`DerivedTargetPrefillTPS`、`DerivedTargetDecodeTPS`
 * 显存估算：权重显存、KV Cache、运行时开销、`G_memory`
-* 吞吐估算：带宽受限 / 算力受限吞吐、`G_decode`、`G_prefill`
-* 最终结果：`G_biz`、`G_final`、每日 token 上限、平均一次对话耗时
+* 吞吐估算与最终结果：带宽受限 / 算力受限吞吐、`G_decode`、`G_prefill`、`G_biz`、`G_final`、每日 token 上限、平均 / P95 单次对话耗时
 
 每个条目都应包含三部分：
 
@@ -779,30 +1020,75 @@ $$
 * 代入值
 * 结果值
 
-这样在修改模型预设、GPU 规格、请求画像或效率系数时，可以直接对照 UI/JSON 的过程明细逐项验证，而不必人工反推。
-## 10. 推理框架建模 (vLLM vs SGLang)
+---
+
+## 10. 推理框架建模（vLLM vs SGLang）
 
 不同的推理框架在调度算法、算子实现及显存管理上存在差异，这些差异直接影响容量规划的准确性。
 
-### 10.1 vLLM (基准)
-*   **PagedAttention**: 几乎消除显存碎片，利用率高达 90% 以上。
-*   **性能特征**: 工业界最通用的吞吐基准（Baseline）。
+### 10.1 vLLM（基准）
 
-### 10.2 SGLang (高性能增强)
-*   **FlashInfer**: 相比 vLLM 默认 Kernel，SGLang 使用 FlashInfer 往往能获得更高的算力利用率。
-    *   *建模*: 算力效率乘以 `1.10` 加成。
-*   **RadixAttention (前缀缓存)**:
-    *   **时间收益**: 缓存命中的输入 token 片段（如 System Prompt）不再需要重新计算。计算平均对话耗时时，Prefill 耗时的分子由 `avg_input_tokens` 降为 `avg_input_tokens * (1 - cache_hit_rate)`。
-    *   **空间代偿**: 维护前序树 (RadixTree) 元数据节点需要额外显存开销。
-    *   *建模*: 运行时显存占比比例 (`runtime_overhead_ratio`) 额外增加 `2%`（如默认从 8% 变为 10%）。
-*   **调度优化**: SGLang 的 Continuous Batching 调度在 Batch 填充率和切换开销上更优。
-    *   *建模*: Decode 效率乘以 `1.15` 加成。
+* **PagedAttention**：几乎消除显存碎片，利用率高。
+* **性能特征**：工业界最通用的吞吐基准（Baseline）。
+
+### 10.2 SGLang（高性能增强）
+
+* **FlashInfer**：相比 vLLM 默认 Kernel，SGLang 往往能获得更高的算力利用率。
+
+  * **建模**：算力效率乘以 `1.10` 加成。
+* **RadixAttention（前缀缓存）**：
+
+  * **时间收益**：缓存命中的输入 token 片段不再需要重新计算。
+  * **建模**：Prefill 有效输入 token 可按 `avg_input_tokens × (1 - cache_hit_rate)` 下降。
+  * **空间代偿**：维护前序树元数据节点需要额外显存开销。
+  * **建模**：`runtime_overhead_ratio` 可额外增加 `2%`。
+* **调度优化**：SGLang 的 Continuous Batching 在 Batch 填充率和切换开销上更优。
+
+  * **建模**：Decode 效率乘以 `1.15` 加成。
 
 ### 10.3 参数映射总结
 
-| 框架 | 算力利用率加成 | Decode 调度加成 | 额外 vRAM 开销 | 前缀缓存支持 |
-| :--- | :--- | :--- | :--- | :--- |
-| vLLM | 1.00 (基准) | 1.00 (基准) | 0% | 有限 (默认 0%) |
-| SGLang | 1.10 | 1.15 | +2% | 原生 (默认 20%+) |
+| 框架     | 算力利用率加成  | Decode 调度加成 | 额外 vRAM 开销 | 前缀缓存支持      |
+| ------ | -------- | ----------- | ---------- | ----------- |
+| vLLM   | 1.00（基准） | 1.00（基准）    | 0%         | 有限（默认 0%）   |
+| SGLang | 1.10     | 1.15        | +2%        | 原生（默认 20%+） |
 
-在该 Sizing 工具中，切换引擎会动态调整上述底层系数，从而更真实地反映真实上线后的资源水位。
+在该 Sizing 工具中，切换引擎会动态调整上述底层系数，从而更真实地反映上线后的资源水位。
+
+---
+
+## 11. 设计原则总结
+
+### 11.1 对外口径优先用“用户时延”而不是“系统 TPS”
+
+业务方最容易理解的不是“系统需要多少 token/s”，而是：
+
+* 平均一次对话要多久
+* P95 最慢要多久
+* 首 token 多久出来
+
+因此：
+
+* 对外输入以“平均 / P95 单次对话耗时”表示
+* 对内自动换算为 `target_prefill_tps_total` 与 `target_decode_tps_total`
+
+### 11.2 对内口径继续保留 TPS
+
+GPU 资源约束的核心公式仍然是吞吐和显存：
+
+* 显存决定 `G_memory`
+* Prefill 总吞吐决定 `G_prefill`
+* Decode 总吞吐决定 `G_decode`
+
+因此内部保留 TPS 口径，可以最大化复用现有代码与公式体系。
+
+### 11.3 平均与 P95 分工不同
+
+* 平均指标更适合评估总体用户感知与日常体验
+* P95 指标更适合做资源保守规划与容量兜底
+
+建议：
+
+* 显存 sizing 优先按 P95 长度估算
+* 吞吐目标优先按 P95 耗时预算推导
+* 最终结果同时输出平均体验估算值，便于业务理解
