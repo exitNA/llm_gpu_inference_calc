@@ -167,7 +167,6 @@ flowchart LR
 - `C_peak`：峰值活跃并发
 - `r_decode`：峰值时 decode-active 比例
 - `r_prefix`：prefix cache 命中率
-- `r_prefill`：平均时延近似中的 prefill-active 比例
 
 ---
 
@@ -196,7 +195,7 @@ flowchart LR
 | `request_shapes` | 请求长度分布，采用最小版 |
 | `decode_active_ratio` | decode-active 比例 |
 | `prefix_cache_hit_rate` | prefix cache 命中率 |
-| `prefill_active_ratio` | 平均时延近似中的 prefill-active 比例 |
+| `target_total_tokens_p95` | P95 总 token 长度，选填，提供时优先使用 |
 
 #### 5.2.1 `request_shapes`（最小版，必填）
 
@@ -269,17 +268,12 @@ flowchart LR
 - 默认：`0.0`
 - 若存在稳定 system prompt / 模板复用 / 固定前缀，可从 `0.2` 起步
 
-#### 5.2.4 `prefill_active_ratio`（必填）
+#### 5.2.4 `target_total_tokens_p95`（选填，强烈建议）
 
-定义域：
+用途：
 
-`0 < prefill_active_ratio <= 1`
-
-推荐默认值：
-
-- 默认：`0.3`
-- 短输入问答类：`0.2 ~ 0.3`
-- 长输入 / 长上下文类：`0.3 ~ 0.5`
+- 若业务侧可直接给出真实的 P95 总长度，应优先使用
+- 若未提供，则采用保守近似 `S_{p95} = S_{in,p95} + S_{out,p95}`
 
 ### 5.3 模型输入（必填）
 
@@ -331,16 +325,18 @@ flowchart LR
 | `serving_framework` | `vLLM` / `SGLang` / `TensorRT-LLM` / 自研 |
 | `framework_version` | 版本 |
 | `support_prefix_cache` | 是否支持 prefix cache |
-| `support_continuous_batching` | 是否支持 continuous batching |
 | `weight_overhead_ratio` | 权重额外显存系数 |
 | `runtime_buffer_ratio` | 运行时固定显存系数 |
 | `prefill_memory_reuse_factor` | Prefill 批内复用系数 |
+| `inst_scale_efficiency` | 多卡实例吞吐扩展效率；单卡实例固定为 `1.0` |
 
 推荐默认值：
 
 - `weight_overhead_ratio = 0.05`
 - `runtime_buffer_ratio = 0.10`
 - `prefill_memory_reuse_factor = 1.00`
+- `inst_scale_efficiency = 1.00`（单卡实例）
+- `inst_scale_efficiency = 0.85`（多卡实例且无实测值时的推荐起点）
 
 说明：
 
@@ -348,6 +344,7 @@ flowchart LR
 - `runtime_buffer_ratio` 只吸收运行时必需 buffer、workspace、allocator 常驻开销
 - `usable_vram_ratio` 只吸收 OOM 安全水位、波动预留与运营安全边界
 - `prefill_memory_reuse_factor` 仅用于 Prefill 带宽模型，反映批内多个 token 对权重访问的分摊效应
+- `inst_scale_efficiency` 仅在 `instance_gpus > 1` 时参与吞吐计算，用于吸收跨卡通信与并行切分导致的非线性扩展损失
 
 ### 5.6 HA 输入（必填）
 
@@ -373,7 +370,6 @@ flowchart LR
 - `target_e2e_p95_sec > target_ttft_p95_sec`
 - `0 < decode_active_ratio <= 1`
 - `0 <= prefix_cache_hit_rate <= 1`
-- `0 < prefill_active_ratio <= 1`
 - 若 `support_prefix_cache = false`，则 `prefix_cache_hit_rate = 0`
 - `0 < usable_vram_ratio <= 1`
 - `Σ request_shapes.weight = 1`
@@ -594,7 +590,7 @@ Prefill 总吞吐需求采用保守上界：
 
 `TPS_{decode}^{gpu} = min(TPS_{decode,memory}^{gpu}, TPS_{decode,compute}^{gpu})`
 
-若单实例为多卡，实例级扩展效率记为 `inst_scale_efficiency`，默认 `1.0`。
+若 `instance_gpus = 1`，取 `inst_scale_efficiency = 1.0`；若 `instance_gpus > 1` 且无实测值，可先取推荐默认值 `0.85`。
 
 单实例 decode 吞吐：
 
@@ -767,16 +763,17 @@ Prefill 可持续并发：
 
 平均 TTFT 近似：
 
-`TTFT_{avg,est} ≈ S_{in,avg}^{eff} / (TPS_{prefill,cluster} / (C_{avg} × r_{prefill}))`
+`TTFT_{avg,est} ≈ S_{in,avg}^{eff} / (TPS_{prefill,cluster} / C_{avg})`
 
 平均 E2E 近似：
 
-`E2E_{avg,est} ≈ S_{in,avg}^{eff} / (TPS_{prefill,cluster} / (C_{avg} × r_{prefill})) + S_{out,avg} / (TPS_{decode,cluster} / (C_{avg} × r_decode))`
+`E2E_{avg,est} ≈ S_{in,avg}^{eff} / (TPS_{prefill,cluster} / C_{avg}) + S_{out,avg} / (TPS_{decode,cluster} / (C_{avg} × r_decode))`
 
 说明：
 
+- 为减少业务输入，本文不再单独引入 `prefill_active_ratio`
+- 因此平均 TTFT / E2E 中的 Prefill 部分默认按全部平均活跃并发竞争 Prefill 吞吐的保守近似计算
 - 该式是工程近似与 sanity check，不是队列论严格推导
-- `r_prefill` 只是平均 prefill 竞争程度近似
 
 ### 13.5 保守 P95 时延近似
 
@@ -800,7 +797,6 @@ Prefill 可持续并发：
 - request_shapes 摘要
 - `decode_active_ratio`
 - `prefix_cache_hit_rate`
-- `prefill_active_ratio`
 - 模型 / GPU / 框架 / HA 选择
 - 是否使用默认值及其清单
 
@@ -835,12 +831,12 @@ Prefill 可持续并发：
 
 为避免中间推导混入单位换算，建议仅在展示层做如下换算：
 
-- `byte -> GB`：`value_GB = value_bytes / 1e9`
-- `byte/s -> GB/s`：`value_GBps = value_bytes_per_sec / 1e9`
+- `byte -> GiB`：`value_GiB = value_bytes / 2^30`
+- `byte/s -> GiB/s`：`value_GiBps = value_bytes_per_sec / 2^30`
 - `FLOP/s -> TFLOP/s`：`value_TFLOPS = value_flops_per_sec / 1e12`
 - `FLOP -> TFLOP`：`value_TFLOP = value_flops / 1e12`
 
-若内部实现采用二进制单位，也应统一在展示层完成，不应混入核心公式。
+显存与带宽展示默认采用二进制单位 `GiB` / `GiB/s`；核心公式内部仍统一使用 `byte` 与 `byte/s`，不在中间过程混入任何展示单位换算。
 
 ---
 
@@ -882,7 +878,7 @@ Prefill 可持续并发：
 
 其中：
 
-- 业务目标输入收敛为并发、TTFT、E2E、`request_shapes`、`decode_active_ratio`、`prefix_cache_hit_rate`、`prefill_active_ratio`
+- 业务目标输入收敛为并发、TTFT、E2E、`request_shapes`、`decode_active_ratio`、`prefix_cache_hit_rate`，并可选补充 `target_total_tokens_p95`
 - 模型输入定义模型结构、规模与精度
 - GPU 选择输入同时包含 GPU 理论规格与有效利用率假设
 - 推理框架输入同时包含框架选择与推荐画像参数
