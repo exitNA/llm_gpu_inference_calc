@@ -818,7 +818,7 @@ $$
 因此，当前规模下的可持续总活跃并发近似为
 
 $$
-C^{sus}=\min\left(C_{total,dec}^{sus},\,C_{total,pre}^{sus}\right)
+C_{total}^{sus}=\min\left(C_{total,dec}^{sus},\,C_{total,pre}^{sus}\right)
 $$
 
 ### 9.3 单请求生成速度
@@ -844,25 +844,37 @@ $$
 因此平均 TTFT 的近似值可写成
 
 $$
-TTFT_{avg}^{est}\approx\frac{S_{in,avg}}{TPS_{pre}^{cluster}/(C_{avg}r_{pre,avg})}
+T_{pre,avg}^{est}\approx\frac{S_{in,avg}}{TPS_{pre}^{cluster}/(C_{avg}r_{pre,avg})}
 $$
 
-相应地，平均 E2E 近似为
+平均 Decode 时延近似为
 
 $$
-E2E_{avg}^{est}\approx \frac{S_{in,avg}}{TPS_{pre}^{cluster}/(C_{avg}r_{pre,avg})}+\frac{S_{out,avg}}{TPS_{dec}^{cluster}/(C_{avg}r_{dec,avg})}
+T_{dec,avg}^{est}\approx\frac{S_{out,avg}}{TPS_{dec}^{cluster}/(C_{avg}r_{dec,avg})}
+$$
+
+于是平均 E2E 近似为
+
+$$
+E2E_{avg}^{est}\approx T_{pre,avg}^{est}+T_{dec,avg}^{est}
 $$
 
 在保守的 P95 口径下，P95 TTFT 上界近似为
 
 $$
-TTFT_{p95}^{upper}\approx\frac{S_{in,p95}}{TPS_{pre}^{cluster}/(C_{peak}r_{pre,peak})}
+T_{pre,p95}^{upper}\approx\frac{S_{in,p95}}{TPS_{pre}^{cluster}/(C_{peak}r_{pre,peak})}
 $$
 
-P95 E2E 上界近似为
+P95 Decode 时延上界近似为
 
 $$
-E2E_{p95}^{upper}\approx \frac{S_{in,p95}}{TPS_{pre}^{cluster}/(C_{peak}r_{pre,peak})}+\frac{S_{out,p95}}{TPS_{dec}^{cluster}/(C_{peak}r_{dec,peak})}
+T_{dec,p95}^{upper}\approx\frac{S_{out,p95}}{TPS_{dec}^{cluster}/(C_{peak}r_{dec,peak})}
+$$
+
+于是 P95 E2E 上界近似为
+
+$$
+E2E_{p95}^{upper}\approx T_{pre,p95}^{upper}+T_{dec,p95}^{upper}
 $$
 
 这一写法与第 5 章、第 7 章保持了一致：Prefill 始终按输入长度相关的吞吐模型处理，并在需求推导和效果反推两处都采用“TTFT 近似等于 Prefill 时间”的同一假设。
