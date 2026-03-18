@@ -9,7 +9,7 @@
 1. 单实例需要多少张 GPU；
 2. 单实例在显存、 Prefill、Decode 三个维度上的能力；
 3. 满足业务目标至少需要多少实例、多少 GPU；
-4. 在该资源规模下，可反推得到怎样的并发、吞吐和时延近似。
+4. 在该资源规模下，可反推得到怎样的 QPS、在途请求数、吞吐和时延近似。
 
 本文追求的是**逻辑自洽、前后一致、便于评审**的 sizing 方法，而不是替代真实 benchmark 或线上压测。其用途主要包括：
 
@@ -48,11 +48,11 @@ flowchart LR
 这六个阶段分别回答六个问题：
 
 - 阶段 1：已知业务、模型、GPU 信息后，测算需要哪些基础统计量？
-- 阶段 2：业务给出的并发、TTFT、E2E 目标，对系统吞吐提出了什么要求？
+- 阶段 2：业务给出的 QPS、TTFT、E2E 目标，对系统吞吐提出了什么要求？
 - 阶段 3：单实例在显存上能否装下模型，并能承载多少活跃请求？
 - 阶段 4：单实例在 Prefill 与 Decode 两个阶段各有多少吞吐能力？
 - 阶段 5：在显存约束、Prefill 约束、Decode 约束下，最少需要多少实例和 GPU？
-- 阶段 6：在这个资源规模下，反推得到的体验指标是否与输入目标一致？
+- 阶段 6：在这个资源规模下，反推得到的 QPS、在途请求数和体验指标是否与输入目标一致？
 
 这样组织目录的目的是让文档始终围绕“**从输入到结果**”这一主线展开，避免按参数类别堆叠内容而失去层次。
 
@@ -128,14 +128,14 @@ $$
 
 业务侧通常提供以下目标：
 
-- 平均活跃并发 $C_{avg}$；
-- 峰值活跃并发 $C_{peak}$；
+- 平均请求到达率 $\lambda_{avg}$；
+- 峰值请求到达率 $\lambda_{peak}$；
 - 平均首字时延目标 $TTFT_{avg}^{target}$；
 - P95 首字时延目标 $TTFT_{p95}^{target}$；
 - 平均单次总时延目标 $E2E_{avg}^{target}$；
 - P95 单次总时延目标 $E2E_{p95}^{target}$。
 
-这里“活跃并发”指同一时刻正在系统内占用资源的请求数，而不是入口 QPS。
+这里的 $\lambda$ 指**模型调用层面的请求到达率**，单位为 req/s。对外服务型 Agent 应用若业务侧只给出用户请求 QPS，则应先按“单个用户请求平均触发多少次模型调用”折算为等效模型调用 QPS，再进入后续测算。本文后续所说的 QPS，默认均指这一层面的等效模型调用 QPS。
 
 #### 4.1.2 请求长度画像
 
@@ -206,7 +206,7 @@ $$
 
 进入正式计算前，至少要检查以下条件：
 
-- $C_{peak}\ge C_{avg}>0$；
+- $\lambda_{peak}\ge \lambda_{avg}>0$；
 - $TTFT_{avg}^{target}>0$，且 $TTFT_{p95}^{target}\ge TTFT_{avg}^{target}$；
 - $E2E_{avg}^{target}>TTFT_{avg}^{target}$；
 - $E2E_{p95}^{target}>TTFT_{p95}^{target}$；
@@ -245,7 +245,7 @@ $$
 
 ## 5. 由体验目标推导系统需求
 
-本阶段回答的问题是：**业务侧给出并发和时延目标后，系统在 Prefill 和 Decode 两个阶段分别至少要提供多少 token 吞吐？**
+本阶段回答的问题是：**业务侧给出 QPS 和时延目标后，系统在 Prefill 和 Decode 两个阶段分别至少要提供多少 token 吞吐？**
 
 ### 5.1 建模思路
 
@@ -288,6 +288,8 @@ $$
 
 这里的单位是输出 token/s。
 
+这一组单请求阶段速率的作用，是把 TTFT 与 E2E 目标解释成单请求层面的阶段处理压力，帮助理解体验目标对 Prefill 与 Decode 的约束强度。它们本身不是 QPS 驱动主测算中用于求实例数的直接输入；在后续资源求解中，真正进入主约束的是第 5.4 节给出的系统总吞吐需求。
+
 ### 5.3 P95 场景下的单请求需求
 
 同理，P95 的 Decode 时间预算为
@@ -308,60 +310,61 @@ $$
 R_{dec,req}^{p95}=\frac{S_{out,p95}}{T_{dec,p95}}
 $$
 
-这样处理后，Prefill 需求只依赖于业务给出的 TTFT 目标和输入长度画像，不再额外引入 Prefill 预算占比之类采购前难以稳定获得的参数。
+与平均口径相同，这些单请求阶段速率主要用于解释高分位体验目标对应的阶段压力，并作为后文效果反推的对照参考，而不是在 QPS 驱动主测算中直接替代系统总吞吐需求。
 
 ### 5.4 从单请求需求到系统总需求
 
-并发请求并不会在任何时刻全部同时处于同一阶段，因此还需要引入阶段活跃比例：
-
-- 平均窗口内处于 Prefill 阶段的请求比例 $r_{pre,avg}$；
-- 峰值窗口内处于 Prefill 阶段的请求比例 $r_{pre,peak}$；
-- 平均窗口内处于 Decode 阶段的请求比例 $r_{dec,avg}$；
-- 峰值窗口内处于 Decode 阶段的请求比例 $r_{dec,peak}$。
-
-这些比例都应满足
-
-$$
-0<r_{pre,avg},r_{pre,peak},r_{dec,avg},r_{dec,peak}\le 1
-$$
-
-若仅采用 Prefill / Decode 两阶段近似，则通常还可取
-
-$$
-r_{pre,*}+r_{dec,*}\approx 1
-$$
-
-但在更实际的系统里，还可能存在排队、收尾和框架处理等非主阶段状态，因此不要求它们严格相加等于 1。
+在 QPS 驱动的口径下，系统总需求直接由**请求到达率 × 单请求 token 量**得到，不再将活跃并发和阶段活跃比例作为主测算输入。
 
 于是，平均 Prefill 总吞吐需求为
 
 $$
-TPS_{pre,target}^{avg}=C_{avg}\,r_{pre,avg}\,R_{pre,req}^{avg}
+TPS_{pre,target}^{avg}=\lambda_{avg}\,S_{in,avg}
 $$
 
 峰值 Prefill 总吞吐需求为
 
 $$
-TPS_{pre,target}^{peak}=C_{peak}\,r_{pre,peak}\,R_{pre,req}^{p95}
+TPS_{pre,target}^{peak}=\lambda_{peak}\,S_{in,p95}
 $$
 
 平均 Decode 总吞吐需求为
 
 $$
-TPS_{dec,target}^{avg}=C_{avg}\,r_{dec,avg}\,R_{dec,req}^{avg}
+TPS_{dec,target}^{avg}=\lambda_{avg}\,S_{out,avg}
 $$
 
 峰值 Decode 总吞吐需求为
 
 $$
-TPS_{dec,target}^{peak}=C_{peak}\,r_{dec,peak}\,R_{dec,req}^{p95}
+TPS_{dec,target}^{peak}=\lambda_{peak}\,S_{out,p95}
 $$
 
-这样处理后，Prefill 与 Decode 的需求推导口径是一致的：都是“**总活跃并发 × 该阶段活跃占比 × 单请求阶段速率需求**”。
+这组公式只依赖采购前更容易获得的业务输入：QPS 与长度画像。它表达的是单位时间内系统必须处理多少输入 token 和输出 token。
 
-若业务侧缺少阶段活跃比例，可取保守近似，例如令 $r_{pre,peak}=1$，或进一步令 $r_{pre,avg}=r_{pre,peak}$。但应明确，这会使 Prefill 约束和 TTFT 反推更保守。
+在这一口径下，TTFT 与 E2E 目标的作用不是再去构造阶段活跃比例，而是：
 
----
+- 通过单请求阶段速率 $R_{pre,req}$ 与 $R_{dec,req}$ 保持对体验目标的解释；
+- 在后文的效果反推中检查给定资源规模下能否守住这些时延目标；
+- 在显存约束中通过 Little 定律近似反推出在途请求数。
+
+### 5.5 由 QPS 与时延目标反推在途请求规模
+
+既然主入口采用 QPS 而不是并发，则在途请求数应作为由到达率和时延共同决定的结果量，而不是前置输入。
+
+在平均口径下，可按 Little 定律近似得到在途请求数：
+
+$$
+C_{avg}^{budget}\approx \lambda_{avg}E2E_{avg}^{target}
+$$
+
+在峰值口径下，本文并不把峰值在途请求数写成 Little 定律的严格结论，而是为了采购前保守估算 KV cache 压力，采用“峰值请求到达率 × 高分位端到端时延”的预算上界：
+
+$$
+C_{peak}^{budget}\approx \lambda_{peak}E2E_{p95}^{target}
+$$
+
+因此，$C_{peak}^{budget}$ 更准确地说是峰值在途请求预算上界，而不是排队论意义上的严格分位点等式。这里的 $C_{avg}^{budget}$ 与 $C_{peak}^{budget}$ 都不是业务侧直接输入，而是：在给定 QPS 和时延目标下，系统大致需要容纳的在途请求规模。后文的显存约束将使用这一量来估算 KV cache 需求。
 
 ## 6. 单实例显存建模
 
@@ -660,13 +663,13 @@ $$
 
 ### 8.1 部署求解的基本原则
 
-实例规模 $g$ 不是预先指定的输入，而是求解结果。测算应从
+实例规模 $g$ 不是预先指定的输入，而是求解结果。测算应从候选集合 $\mathcal{G}$ 开始逐个枚举，其中
 
 $$
-g\in\{1,2,4,8,\dots\}
+g\in\mathcal{G}
 $$
 
-这样的候选集合开始逐个枚举。
+$\mathcal{G}$ 由实际部署约束决定，通常综合节点 GPU 拓扑、并行方式是否自然、调度碎片、运维复杂度等因素选取。若没有额外约束，也可先取较宽的候选集合，例如 $\mathcal{G}=\{1,2,3,\dots,G_{max}\}$，再筛除明显不合理的方案。
 
 对于每个候选 $g$，只做三件事：
 
@@ -700,10 +703,10 @@ $$
 
 #### 8.2.3 显存约束
 
-若单实例在显存上最多承载 $N_{req}^{mem}$ 个保守长度请求，则为了容纳峰值活跃并发，至少需要
+若单实例在显存上最多承载 $N_{req}^{mem}$ 个保守长度请求，而按 QPS 与时延目标反推得到的峰值在途请求规模近似为 $C_{peak}^{budget}$，则为了容纳这些在途请求，至少需要
 
 $$
-N_{inst}^{mem}=\left\lceil\frac{C_{peak}}{N_{req}^{mem}}\right\rceil
+N_{inst}^{mem}=\left\lceil\frac{C_{peak}^{budget}}{N_{req}^{mem}}\right\rceil
 $$
 
 个实例。
@@ -762,8 +765,10 @@ $$
 本阶段不是主决策，而是用于检查前面推导出来的资源规模与业务目标是否一致。若反推结果明显偏离输入目标，应回头检查：
 
 - 长度画像是否过于乐观或保守；
-- 阶段活跃比例是否设置合理，是否与业务真实运行形态一致；
-- 显存或吞吐模型中的结构参数是否填错。
+- QPS 假设是否与真实流量形态一致；
+- 显存或吞吐模型中的结构参数是否填错；
+- 效率系数是否过于乐观；
+- 高可用口径与有效承载实例数是否混淆。
 
 ### 9.1 集群总吞吐能力
 
@@ -787,70 +792,58 @@ $$
 
 为保持与实例求解阶段一致，效果反推默认仍采用 $S_{in,p95}$ 下的 Prefill 能力。因此，无论平均还是峰值场景，文中的 Prefill 相关反推通常都偏保守。
 
-### 9.2 可持续并发近似能力
+### 9.2 可持续 QPS 近似能力
 
-若要反推在当前资源规模下可持续支持的总活跃并发，可以沿用与前文一致的阶段活跃比例口径。后文凡涉及阶段活跃比例作分母时，默认这些比例已按第 5.4 节满足正值约束。
-
-先看 Decode 侧。能被当前集群持续支撑的 Decode 活跃请求数约为
+在当前资源规模下，若按 P95 长度画像估算可持续承载能力，则 Decode 侧可持续 QPS 近似为
 
 $$
-C_{dec}^{sus}=\frac{TPS_{dec}^{cluster}}{R_{dec,req}^{p95}}
+\lambda_{dec}^{sus}=\frac{TPS_{dec}^{cluster}}{S_{out,p95}}
 $$
 
-把它换算成总活跃并发，得到
+Prefill 侧可持续 QPS 近似为
 
 $$
-C_{total,dec}^{sus}=\frac{C_{dec}^{sus}}{r_{dec,peak}}
+\lambda_{pre}^{sus}=\frac{TPS_{pre}^{cluster}}{S_{in,p95}}
 $$
 
-同理，Prefill 侧可持续支撑的 Prefill 活跃请求数约为
+因此，当前规模下可持续承载的总 QPS 近似为
 
 $$
-C_{pre}^{sus}=\frac{TPS_{pre}^{cluster}}{R_{pre,req}^{p95}}
+\lambda^{sus}=\min\left(\lambda_{dec}^{sus},\,\lambda_{pre}^{sus}\right)
 $$
 
-换算成总活跃并发为
-
-$$
-C_{total,pre}^{sus}=\frac{C_{pre}^{sus}}{r_{pre,peak}}
-$$
-
-因此，当前规模下的可持续总活跃并发近似为
-
-$$
-C_{total}^{sus}=\min\left(C_{total,dec}^{sus},\,C_{total,pre}^{sus}\right)
-$$
+这一定义与前文的求解逻辑保持一致：Prefill 与 Decode 哪一侧更紧，就由哪一侧决定整体可持续 QPS。
 
 ### 9.3 单请求生成速度
 
-在峰值窗口内，若 Decode 阶段平均有 $C_{peak}r_{dec,peak}$ 个请求同时活跃，则单请求平均生成速度近似为
+在峰值 QPS 为 $\lambda_{peak}$ 的窗口内，若集群总 Decode 吞吐为 $TPS_{dec}^{cluster}$，则单请求平均可分到的输出 token 速率近似为
 
 $$
-V_{gen}\approx\frac{TPS_{dec}^{cluster}}{C_{peak}r_{dec,peak}}
+V_{gen}^{peak}\approx\frac{TPS_{dec}^{cluster}}{\lambda_{peak}}
 $$
 
 它的单位是输出 token/s。
 
 ### 9.4 时延反推
 
-为了保证口径与前文一致，Prefill 时延反推继续使用同样的 Prefill 吞吐模型和同样的阶段活跃比例。
+为了保证口径与前文一致，Prefill 时延反推继续使用同样的 Prefill 吞吐模型。
 
-在“TTFT 近似等于 Prefill 时间”的假设下，平均场景中每个 Prefill 活跃请求平均可分到的 Prefill 吞吐约为
+在“TTFT 近似等于 Prefill 时间”的假设下，平均场景中每个请求平均可分到的 Prefill 吞吐约为
 
 $$
-\frac{TPS_{pre}^{cluster}}{C_{avg}r_{pre,avg}}
+\frac{TPS_{pre}^{cluster}}{\lambda_{avg}}
 $$
 
 因此平均 TTFT 的近似值可写成
 
 $$
-T_{pre,avg}^{est}\approx\frac{S_{in,avg}}{TPS_{pre}^{cluster}/(C_{avg}r_{pre,avg})}
+T_{pre,avg}^{est}\approx\frac{S_{in,avg}}{TPS_{pre}^{cluster}/\lambda_{avg}}=\frac{\lambda_{avg}S_{in,avg}}{TPS_{pre}^{cluster}}
 $$
 
 平均 Decode 时延近似为
 
 $$
-T_{dec,avg}^{est}\approx\frac{S_{out,avg}}{TPS_{dec}^{cluster}/(C_{avg}r_{dec,avg})}
+T_{dec,avg}^{est}\approx\frac{S_{out,avg}}{TPS_{dec}^{cluster}/\lambda_{avg}}=\frac{\lambda_{avg}S_{out,avg}}{TPS_{dec}^{cluster}}
 $$
 
 于是平均 E2E 近似为
@@ -862,13 +855,13 @@ $$
 在保守的 P95 口径下，P95 TTFT 上界近似为
 
 $$
-T_{pre,p95}^{upper}\approx\frac{S_{in,p95}}{TPS_{pre}^{cluster}/(C_{peak}r_{pre,peak})}
+T_{pre,p95}^{upper}\approx\frac{S_{in,p95}}{TPS_{pre}^{cluster}/\lambda_{peak}}=\frac{\lambda_{peak}S_{in,p95}}{TPS_{pre}^{cluster}}
 $$
 
 P95 Decode 时延上界近似为
 
 $$
-T_{dec,p95}^{upper}\approx\frac{S_{out,p95}}{TPS_{dec}^{cluster}/(C_{peak}r_{dec,peak})}
+T_{dec,p95}^{upper}\approx\frac{S_{out,p95}}{TPS_{dec}^{cluster}/\lambda_{peak}}=\frac{\lambda_{peak}S_{out,p95}}{TPS_{dec}^{cluster}}
 $$
 
 于是 P95 E2E 上界近似为
@@ -879,7 +872,23 @@ $$
 
 这一写法与第 5 章、第 7 章保持了一致：Prefill 始终按输入长度相关的吞吐模型处理，并在需求推导和效果反推两处都采用“TTFT 近似等于 Prefill 时间”的同一假设。
 
-### 9.5 每日产能
+### 9.5 在途请求数反推
+
+在平均场景下，按 Little 定律可反推平均在途请求数近似为
+
+$$
+C_{avg}^{est}\approx \lambda_{avg}E2E_{avg}^{est}
+$$
+
+在保守的峰值口径下，可反推峰值在途请求数上界近似为
+
+$$
+C_{peak}^{upper}\approx \lambda_{peak}E2E_{p95}^{upper}
+$$
+
+这一结果既可用于验证第 8 章显存约束里采用的在途请求预算是否合理，也可帮助判断当前方案的 KV cache 压力主要出现在平均流量还是峰值流量窗口。
+
+### 9.6 每日产能
 
 若只关心 token 产能，也可以计算每日 token 处理量。集群每日 Decode 产能近似为
 
@@ -893,8 +902,6 @@ $$
 Q_{pre}^{day}=TPS_{pre}^{cluster}\times 86400
 $$
 
----
-
 ## 10. 输出结果建议
 
 为了便于评审和决策，最终输出建议至少包括五类内容。
@@ -906,14 +913,13 @@ $$
 - TTFT 近似等于模型 Prefill 时间；
 - Prefill 吞吐采用输入长度相关的近似模型；
 - 多卡显存按实例级分片上界处理；
-- 阶段活跃比例采用给定值或保守值；
 - 效率系数用于吸收框架实现、通信与服务栈差异。
 
 这样做的目的是让评审者先判断“假设是否接受”，再判断“结果是否可用”。
 
 ### 10.2 输入摘要
 
-概括业务目标、长度画像、模型关键信息、GPU 规格、效率系数和高可用假设，确保评审者能快速判断“输入是否合理”。
+概括业务目标、长度画像、模型关键信息、GPU 规格、效率系数和高可用假设，尤其明确采用的是模型调用 QPS 还是由用户请求 QPS 折算得到的等效模型调用 QPS，确保评审者能快速判断“输入是否合理”。
 
 ### 10.3 部署求解结果
 
@@ -931,6 +937,7 @@ $$
 - Decode 约束实例数；
 - Prefill 约束实例数；
 - 显存约束实例数；
+- 由 QPS 与时延目标反推的峰值在途请求预算 $C_{peak}^{budget}$；
 - 业务最小实例数 $N_{inst}^{biz}$；
 - 业务最小 GPU 数 $G_{biz}$；
 - 高可用后的最终 GPU 数 $G_{final}$；
@@ -941,7 +948,8 @@ $$
 明确给出：
 
 - 集群总 Prefill / Decode 吞吐；
-- 可持续并发能力；
+- 可持续 QPS 能力；
+- 由当前规模反推的平均 / 峰值在途请求数；
 - 单请求平均生成速度；
 - 平均时延近似和保守 P95 时延近似；
 - 每日产能。
