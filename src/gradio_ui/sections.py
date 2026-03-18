@@ -190,12 +190,13 @@ def build_sidebar(gr, defaults: tuple[Any, ...]) -> SidebarComponents:
     )
 
 
-def build_results_panel(gr, default_result: dict[str, Any]) -> ResultComponents:
+def build_results_panel(gr, default_result: dict[str, Any] | None = None) -> ResultComponents:
+    initial_result = default_result or {}
     with gr.Column(scale=8, min_width=860, elem_classes=["workspace-content"]):
-        overview_html = gr.HTML(value=build_overview_html(default_result))
-        memory_html = gr.HTML(value=build_memory_analysis_html(default_result))
-        throughput_html = gr.HTML(value=build_throughput_analysis_html(default_result))
-        final_html = gr.HTML(value=build_final_summary_html(default_result))
+        overview_html = gr.HTML(value="" if default_result is None else build_overview_html(initial_result))
+        memory_html = gr.HTML(value="" if default_result is None else build_memory_analysis_html(initial_result))
+        throughput_html = gr.HTML(value="" if default_result is None else build_throughput_analysis_html(initial_result))
+        final_html = gr.HTML(value="" if default_result is None else build_final_summary_html(initial_result))
 
         with gr.Accordion("📋 详细数据与原始 JSON", open=False, elem_classes=["custom-accordion"]):
             with gr.Tabs():
@@ -205,24 +206,24 @@ def build_results_panel(gr, default_result: dict[str, Any]) -> ResultComponents:
                         datatype=["str"] * len(REQUEST_TABLE_HEADERS),
                         interactive=False,
                         label="业务口径",
-                        value=build_request_detail_rows(default_result),
+                        value=[] if default_result is None else build_request_detail_rows(initial_result),
                     )
                     kv_table = gr.Dataframe(
                         headers=KV_TABLE_HEADERS,
                         datatype=["str"] * len(KV_TABLE_HEADERS),
                         interactive=False,
                         label="Cache 口径",
-                        value=build_kv_detail_rows(default_result),
+                        value=[] if default_result is None else build_kv_detail_rows(initial_result),
                     )
                 with gr.Tab("计算过程文本"):
                     calc_text = gr.Textbox(
                         label="计算过程",
-                        value=default_result["calculation_process_text"],
+                        value="" if default_result is None else initial_result["calculation_process_text"],
                         lines=24,
                         interactive=False,
                     )
                 with gr.Tab("原始 JSON"):
-                    raw_json = gr.JSON(label="原始结果", value=default_result)
+                    raw_json = gr.JSON(label="原始结果", value=initial_result)
 
     return ResultComponents(
         overview_html=overview_html,

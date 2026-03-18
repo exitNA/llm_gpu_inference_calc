@@ -993,6 +993,22 @@
   gap: 14px;
 }
 
+.calc-step-list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.calc-section-summary-inline {
+  padding: 10px 12px;
+  border-radius: 12px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.05), rgba(255, 255, 255, 0.9));
+  border: 1px solid var(--c-border-light);
+  font-size: 13px;
+  line-height: 1.55;
+  color: var(--c-text-secondary);
+}
+
 .calc-section-card {
   border: 1px solid var(--c-border);
   border-radius: 20px;
@@ -1248,16 +1264,13 @@
     flex-direction: column;
   }
 
-  .calc-step-card {
-    grid-template-columns: 1fr;
-  }
-
   .calc-process-copy {
     max-width: none;
   }
 
-  .calc-step-topline {
+  .calc-step-head {
     flex-direction: column;
+    align-items: flex-start;
   }
 
   .calc-step-result-inline {
@@ -1265,11 +1278,10 @@
     width: fit-content;
   }
 
-  .calc-step-formula,
-  .calc-step-detail,
+  .calc-step-formula-line,
+  .calc-step-detail-line,
   .calc-step-note {
     grid-template-columns: 1fr;
-    gap: 6px;
   }
 }
 
@@ -1986,6 +1998,16 @@
   user-select: none;
 }
 
+.calc-summary-meta {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--c-text-secondary);
+  background: rgba(255, 255, 255, 0.72);
+  border: 1px solid rgba(255, 255, 255, 0.9);
+  border-radius: 999px;
+  padding: 2px 8px;
+}
+
 .in-card-calc summary:hover {
   background: rgba(79, 70, 229, 0.12);
 }
@@ -2012,6 +2034,157 @@
   font-family: var(--font-mono);
   margin-right: 4px;
   font-size: 11px;
+}
+
+.calc-step-card {
+  border: 1px solid var(--c-border);
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.92);
+  padding: 10px 12px;
+}
+
+.calc-step-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 12px;
+  align-items: start;
+}
+
+.calc-step-head {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+}
+
+.calc-step-metric-wrap {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.calc-step-index {
+  width: 22px;
+  height: 22px;
+  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  background: var(--c-text-primary);
+  color: #fff;
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.calc-step-metric {
+  font-size: 13px;
+  font-weight: 700;
+  line-height: 1.3;
+  color: var(--c-text-primary);
+}
+
+.calc-step-result-inline {
+  padding: 5px 9px;
+  border-radius: 9px;
+  background: rgba(16, 185, 129, 0.08);
+  border: 1px solid rgba(16, 185, 129, 0.18);
+  color: #047857;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  font-weight: 700;
+  white-space: nowrap;
+  text-align: center;
+}
+
+.calc-step-main {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+.calc-step-side {
+  display: flex;
+  align-items: flex-start;
+  justify-content: flex-end;
+}
+
+.calc-step-formula-line,
+.calc-step-detail-line {
+  display: grid;
+  grid-template-columns: 26px 1fr;
+  align-items: start;
+  gap: 8px;
+}
+
+.calc-step-formula-wrap {
+  display: grid;
+  gap: 4px;
+}
+
+.calc-step-human-formula {
+  padding: 7px 9px;
+  border-radius: 9px;
+  background: linear-gradient(135deg, rgba(99, 102, 241, 0.06), rgba(255, 255, 255, 0.96));
+  border: 1px solid rgba(99, 102, 241, 0.12);
+  color: var(--c-text-primary);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.45;
+}
+
+.calc-step-k {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 24px;
+  border-radius: 7px;
+  background: var(--c-surface-raised);
+  border: 1px solid var(--c-border-light);
+  color: var(--c-text-tertiary);
+  font-size: 9px;
+  font-weight: 700;
+}
+
+.calc-step-v {
+  display: block;
+  margin: 0;
+  padding: 7px 9px;
+  border-radius: 9px;
+  background: #f8fafc;
+  border: 1px solid var(--c-border-light);
+  color: var(--c-text-secondary);
+  font-family: var(--font-mono);
+  font-size: 11px;
+  line-height: 1.4;
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.calc-step-detail-line .calc-step-v {
+  color: var(--c-text-primary);
+}
+
+.calc-step-note {
+  padding: 7px 9px;
+  border-left: 3px solid var(--c-amber);
+  background: rgba(245, 158, 11, 0.08);
+  border-radius: 0 9px 9px 0;
+  font-size: 11px;
+  line-height: 1.4;
+  color: #92400e;
+}
+
+@media (max-width: 900px) {
+  .calc-step-layout {
+    grid-template-columns: 1fr;
+    gap: 8px;
+  }
+
+  .calc-step-side {
+    justify-content: flex-start;
+  }
 }
 
 

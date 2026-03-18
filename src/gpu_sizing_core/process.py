@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from .calculations import get_peak_compute_tflops, resolve_head_dim
@@ -108,18 +109,84 @@ def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str,
     ]
 
 
+_COMPACT_FORMULA_REPLACEMENTS: list[tuple[str, str]] = [
+    ("TPS_pre,target^avg", "Pre_avg"),
+    ("TPS_dec,target^avg", "Dec_avg"),
+    ("TPS_pre,target^peak", "Pre_peak"),
+    ("TPS_dec,target^peak", "Dec_peak"),
+    ("TPS_pre,p95^cap", "Pre_cap95"),
+    ("TPS_pre,avg^cap", "Pre_cap_avg"),
+    ("TPS_dec^cap", "Dec_cap"),
+    ("TPS_pre,bw^card", "Pre_bw"),
+    ("TPS_pre,cmp^card", "Pre_cmp"),
+    ("TPS_pre^card", "Pre_card"),
+    ("TPS_dec,bw^card", "Dec_bw"),
+    ("TPS_dec,cmp^card", "Dec_cmp"),
+    ("TPS_dec^card", "Dec_card"),
+    ("C_max,p95^mem", "C_mem95"),
+    ("C_peak^budget", "C_peak"),
+    ("C_avg^budget", "C_avg"),
+    ("M_cache^req(S_p95)", "M_req95"),
+    ("M_cache^req(S_avg)", "M_req_avg"),
+    ("M_cache", "M_cache"),
+    ("V_cache^avail", "V_cache"),
+    ("V_gpu^eff", "V_gpu_eff"),
+    ("T_dec,p95", "T_dec95"),
+    ("T_dec,avg", "T_dec_avg"),
+    ("Req_day^p95", "Req_day95"),
+    ("λ_p95^sus", "QPS95"),
+    ("λ_avg^sus", "QPSavg"),
+    ("λ_peak", "QPSpeak"),
+    ("λ_avg", "QPSavg_in"),
+    ("S_in,p95", "Sin95"),
+    ("S_out,p95", "Sout95"),
+    ("S_in,avg", "Sin_avg"),
+    ("S_out,avg", "Sout_avg"),
+    ("S_p95", "S95"),
+    ("S_avg", "Savg"),
+    ("TTFT_p95,target", "TTFT95"),
+    ("TTFT_p95", "TTFT95"),
+    ("TTFT_avg", "TTFTavg"),
+    ("E2E_p95", "E2E95"),
+    ("E2E_avg", "E2Eavg"),
+]
+
+
+def _compact_formula(formula: str) -> str:
+    compact = formula
+    for source, target in _COMPACT_FORMULA_REPLACEMENTS:
+        compact = compact.replace(source, target)
+    compact = compact.replace("TPS_pre", "Pre")
+    compact = compact.replace("TPS_dec", "Dec")
+    compact = compact.replace("P_act", "Pact")
+    compact = compact.replace("B_mem", "Bmem")
+    compact = compact.replace("F_peak", "Fpeak")
+    compact = compact.replace("α_attn", "a_attn")
+    compact = compact.replace("η_bw", "eta_bw")
+    compact = compact.replace("η_cmp", "eta_cmp")
+    compact = compact.replace("η_vram", "eta_vram")
+    compact = compact.replace("ρ_conc,p95", "rho95")
+    return compact
+
+
+def _strip_units(text: str) -> str:
+    stripped = re.sub(r"\s+(tok/s|req/s|req/day|ms/token|tokens|req|GB/s|TFLOPS|FLOPs|GB|MB|KB|s)\b", "", text)
+    stripped = re.sub(r"\s+", " ", stripped).strip()
+    return stripped
+
+
 def format_calculation_process_text(sections: list[dict[str, Any]]) -> str:
     lines: list[str] = []
     for section in sections:
         lines.append(f"[{section['title']}]")
-        if section.get("summary"):
-            lines.append(f"- 说明: {section['summary']}")
         for step in section["steps"]:
-            lines.append(f"- {step['label']}")
-            lines.append(f"  公式: {step['formula']}")
-            lines.append(f"  代入: {step['substitution']}")
-            lines.append(f"  结果: {step['result']}")
+            compact_formula = _compact_formula(step["formula"])
+            compact_substitution = _strip_units(step["substitution"])
+            line = (
+                f"- {step['label']}: {compact_formula} -> {compact_substitution} -> {step['result']}"
+            )
             if step.get("note"):
-                lines.append(f"  备注: {step['note']}")
+                line = f"{line} ({step['note']})"
+            lines.append(line)
         lines.append("")
     return "\n".join(lines).strip()

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import sys
 from typing import Any
 
 from gpu_sizing_core.service import evaluate_single_model, format_result_text
@@ -15,18 +16,30 @@ from ui.views import (
 from .config import build_configs, build_default_configs, default_component_values
 
 
-def build_default_result() -> dict[str, Any]:
+def _print_console_calc_trace(context: str, result: dict[str, Any]) -> None:
+    print(
+        f"[calc-trace] {context}: {result['model_name']} | G_req={result['business_gpu_count']} | 主导约束={' / '.join(result['dominant_constraints'])}",
+        file=sys.stderr,
+        flush=True,
+    )
+    print(result["calculation_process_text"], file=sys.stderr, flush=True)
+
+
+def build_default_result(*, emit_console_trace: bool = True) -> dict[str, Any]:
     model, traffic, gpu, runtime = build_default_configs()
-    return evaluate_single_model(
+    result = evaluate_single_model(
         model=model,
         traffic=traffic,
         gpu=gpu,
         runtime=runtime,
     )
+    if emit_console_trace:
+        _print_console_calc_trace("default-result", result)
+    return result
 
 
 def build_default_result_text() -> str:
-    return format_result_text(build_default_result())
+    return format_result_text(build_default_result(emit_console_trace=False))
 
 
 def run_analysis(
@@ -39,6 +52,7 @@ def run_analysis(
         gpu=gpu,
         runtime=runtime,
     )
+    _print_console_calc_trace("interactive-analysis", result)
     return (
         build_overview_html(result),
         build_memory_analysis_html(result),

@@ -32,27 +32,38 @@ def get_dominant_constraints(result: dict[str, Any]) -> list[str]:
 
 def render_calc_section_steps(section: dict[str, Any]) -> str:
     step_cards = []
-    for step in section.get("steps", []):
+    for idx, step in enumerate(section.get("steps", []), start=1):
         note_html = ""
         if step.get("note"):
             note_html = f'<div class="calc-step-note">{escape(step["note"])}</div>'
+        human_formula = step.get("formula_note") or step["formula"]
+        compact_formula = human_formula.split("=", 1)[1].strip() if "=" in human_formula else human_formula
         step_cards.append(
             f"""
             <div class="calc-step-card">
-              <div class="calc-step-main">
-                <div class="calc-step-topline">
-                  <div class="calc-step-metric">{escape(step["label"])}</div>
+              <div class="calc-step-layout">
+                <div class="calc-step-main">
+                  <div class="calc-step-head">
+                    <div class="calc-step-metric-wrap">
+                      <span class="calc-step-index">{idx:02d}</span>
+                      <div class="calc-step-metric">{escape(step["label"])}</div>
+                    </div>
+                  </div>
+                  <div class="calc-step-formula-line">
+                    <span class="calc-step-k">公式</span>
+                    <div class="calc-step-formula-wrap">
+                      <div class="calc-step-human-formula">{escape(compact_formula)}</div>
+                    </div>
+                  </div>
+                  <div class="calc-step-detail-line">
+                    <span class="calc-step-k">代入</span>
+                    <code class="calc-step-v">{escape(step["substitution"])}</code>
+                  </div>
+                  {note_html}
+                </div>
+                <div class="calc-step-side">
                   <div class="calc-step-result-inline">{escape(step["result"])}</div>
                 </div>
-                <div class="calc-step-formula">
-                  <span class="calc-step-k">公式</span>
-                  <span class="calc-step-v">{escape(step["formula"])}</span>
-                </div>
-                <div class="calc-step-detail">
-                  <span class="calc-step-k">代入</span>
-                  <span class="calc-step-v">{escape(step["substitution"])}</span>
-                </div>
-                {note_html}
               </div>
             </div>
             """
@@ -66,11 +77,15 @@ def render_calc_accordion(title: str, section: dict[str, Any] | None) -> str:
     step_cards = render_calc_section_steps(section)
     summary_html = ""
     if section.get("summary"):
-        summary_html = f'<div class="calc-step-note">{escape(section["summary"])}</div>'
+        summary_html = f'<div class="calc-section-summary-inline">{escape(section["summary"])}</div>'
+    step_count = len(section.get("steps", []))
     return f"""
     <div class="in-card-calc">
       <details>
-        <summary><span>{escape(title)}</span></summary>
+        <summary>
+          <span>{escape(title)}</span>
+          <span class="calc-summary-meta">{step_count} steps</span>
+        </summary>
         <div class="calc-step-list">
           {summary_html}
           {step_cards}
