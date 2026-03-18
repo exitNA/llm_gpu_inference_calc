@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from gpu_sizing import GPUConfig, ModelConfig
+from gpu_sizing_core.models import GPUConfig, ModelConfig
 
 DATA_DIR = Path(__file__).resolve().parent.parent / "data"
 MODELS_DIR = DATA_DIR / "models"
