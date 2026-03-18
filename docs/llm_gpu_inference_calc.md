@@ -2,1162 +2,830 @@
 
 ---
 
-## 1. 文档目标
+## 1. 文档目标与边界
 
-本文用于在线推理场景下的大模型 GPU 资源测算，给出一套从**输入条件**出发，经过**部署方案求解**，最终输出**GPU 数量与预期可达到效果**的完整方法。
+本文给出一套面向**采购前容量规划**的大模型在线推理 GPU 资源测算方法。它从业务目标、模型信息和 GPU 规格出发，依次推导：
 
-本文目标不是复现精确 benchmark，而是提供一套：
+1. 单实例需要多少张 GPU；
+2. 单实例在显存、Prefill、Decode 三个维度上的能力；
+3. 满足业务目标至少需要多少实例、多少 GPU；
+4. 在该资源规模下，可反推得到怎样的并发、吞吐和时延近似。
 
-- 逻辑自洽
-- 公式口径统一
-- 便于理解与评审
-- 可用于前期 sizing / 方案比较 / 容量规划 / 采购前预算评估
+本文追求的是**逻辑自洽、前后一致、便于评审**的 sizing 方法，而不是替代真实 benchmark 或线上压测。其用途主要包括：
 
-的估算方法。
+- 采购前 GPU 数量预算；
+- 不同模型 / GPU / 部署方案的横向比较；
+- 容量规划和扩容预估；
+- 对体验目标是否可达进行前期可行性判断。
 
-本文输出：
+本文不直接处理以下更细粒度问题，这些因素统一吸收到少量效率系数中：
 
-- 推荐部署方案
-- 单实例所需 GPU 数 $g$
-- 是否需要分片
-- 部署模式
-- 业务所需 GPU 数 $G_{biz}$
-- 考虑高可用后的最终 GPU 数 $G_{final}$
-- 基于已推导 GPU 数可达到的并发、吞吐、生成速度、时延等预期效果
+- 实例内 TP / EP / PP 的精细通信建模；
+- 调度器细节、连续批处理细节和排队分布；
+- 特定推理框架对 kernel、算子融合、paged attention 的实现差异；
+- 严格 SLA 证明。
 
-本文强调：
-
-- 核心用途是**采购前 GPU 资源预估**
-- 用户不需要预先指定“单卡完整装载”还是“多卡分片装载”
-- 这些都是测算过程自动推导出来的结果，而不是原始输入
+因此，本文输出的是**采购前方法论上的合理估算值**，而不是生产环境的最终承诺值。
 
 ---
 
-## 2. 适用范围与方法边界
+## 2. 总体方法框架
 
-### 2.1 适用范围
-
-支持以下模型与结构的前期估算：
-
-- Dense / MoE
-- MHA / GQA / MQA / MLA / Hybrid Attention
-- 在线推理场景下的 prefill / decode 分阶段容量估算
-- 基于 TTFT / E2E / 并发目标反推资源规模
-- 基于模型、GPU、框架候选进行部署方案比较
-
-### 2.2 方法边界
-
-本文属于**容量规划方法**，不等价于线上精确 SLA 保证或框架 benchmark。以下内容默认采用工程近似：
-
-1. 横向扩副本时吞吐近似线性增长。
-2. 单实例内部 TP / EP / PP 的通信开销只通过“多卡扩展效率”近似吸收，不做精细链路建模。
-3. Prefill 吞吐在缺少实测与详细到达率建模时，采用**保守代理模型**，其定位是采购前上界估算，而不是对真实 prefill 机理的严格还原。
-4. 平均 / P95 对话时延反推属于 sanity check，不构成 SLA 证明。
-5. 多维 P95 长度拼装属于保守 sizing，而非严格联合分布建模。
-6. 多卡实例的显存可行性，在采购前阶段按**实例级 pooled/sharded 可行性上界**处理，不等价于 replicated 多卡实例的严格显存证明。
-7. 文中主变量默认遵循全局单位约定：显存相关量用 $byte$，带宽相关量用 $byte/s$，算力相关量用 $FLOP/s$，token 吞吐相关量用 $token/s$；仅在结果展示层转换为人类易读单位。
-
-若需要更高精度建模，应补充：
-
-- 多卡实例内通信拓扑与并行方式
-- 请求到达率与 burst 窗口
-- request shape 联合分布
-- 真实线上 profiling 或 benchmark 数据
-- Prefill / Decode 分阶段实测吞吐
-
----
-
-## 3. 总体方法框架
-
-本文采用四层结构：
+整套方法按六个阶段展开。
 
 ```mermaid
 flowchart LR
-    A[输入条件]
-    B[部署方案求解]
-    C[资源规模输出]
-    D[效果反推与校验]
+    A[阶段 1<br/>输入整理与预处理]
+    B[阶段 2<br/>由体验目标推导系统需求]
+    C[阶段 3<br/>单实例显存建模]
+    D[阶段 4<br/>单实例吞吐建模]
+    E[阶段 5<br/>部署方案与集群规模求解]
+    F[阶段 6<br/>效果反推与一致性校验]
 
-    A --> B --> C --> D
+    A --> B --> C --> D --> E --> F
 ```
 
-其中：
+这六个阶段分别回答六个问题：
 
-### 第 1 层：输入条件
+- 阶段 1：已知业务、模型、GPU 信息后，测算需要哪些基础统计量？
+- 阶段 2：业务给出的并发、TTFT、E2E 目标，对系统吞吐提出了什么要求？
+- 阶段 3：单实例在显存上能否装下模型，并能承载多少活跃请求？
+- 阶段 4：单实例在 Prefill 与 Decode 两个阶段各有多少吞吐能力？
+- 阶段 5：在显存约束、Prefill 约束、Decode 约束下，最少需要多少实例和 GPU？
+- 阶段 6：在这个资源规模下，反推得到的体验指标是否与输入目标一致？
 
-输入包括：
-
-- 业务目标输入
-- 模型输入
-- GPU 选择输入
-- 推理框架 / 部署档位输入
-- HA 输入
-
-### 第 2 层：部署方案求解
-
-根据输入条件，自动推导：
-
-- 单卡是否可完整装载
-- 最小服务单元由几张卡组成
-- 是否需要分片
-- 单实例显存与吞吐能力
-- 故障单元规模
-
-### 第 3 层：资源规模输出
-
-在部署方案确定后，计算：
-
-- 显存约束实例数 / GPU 数
-- Prefill 吞吐约束实例数 / GPU 数
-- Decode 吞吐约束实例数 / GPU 数
-- 业务所需最小 GPU 数 $G_{biz}$
-- 高可用后最终 GPU 数 $G_{final}$
-
-### 第 4 层：效果反推与校验
-
-基于已推导的 GPU 数，反推：
-
-- 可持续并发能力
-- 可用吞吐上限
-- 单请求生成速度
-- 平均 / 保守 P95 时延近似
-- 每日产能
-
-说明：本层为工程近似与 sanity check，不作为采购结论的唯一依据。
+这样组织目录的目的是让文档始终围绕“**从输入到结果**”这一主线展开，避免按参数类别堆叠内容而失去层次。
 
 ---
 
-## 4. 统一术语与记号
+## 3. 输入整理与预处理
 
-### 4.1 基本对象
+### 3.1 输入项
 
-- **GPU**：单张物理卡
-- **实例（instance）**：一个可独立提供推理服务的最小服务单元
-- **副本（replica）**：多个同构实例组成的横向扩展副本集合
-- **集群（cluster）**：所有用于承载业务的实例总和
+测算至少需要五类输入。
 
-### 4.2 关键部署概念
+#### 3.1.1 业务目标
 
-- $g$：单实例占用的 GPU 数
-- $N_{inst}$：实例数
-- $G_{total}=N_{inst}\times g$
-- $is_{shard}$：单实例内部是否需要跨卡切分模型 / 缓存
-- $mode_{deploy}$：部署模式，取值为“单卡完整装载”或“多卡分片装载”
-- $G_{fail}$：一次最小故障会损失的 GPU 数
-- $type_{mem}$：显存可行性口径，取值为“严格可行”或“分片上界可行”
+业务侧通常提供以下目标：
 
-### 4.3 哪些量是求解结果
+- 平均活跃并发 $C_{avg}$；
+- 峰值活跃并发 $C_{peak}$；
+- 平均首字时延目标 $TTFT_{avg}^{target}$；
+- P95 首字时延目标 $TTFT_{p95}^{target}$；
+- 平均单次总时延目标 $E2E_{avg}^{target}$；
+- P95 单次总时延目标 $E2E_{p95}^{target}$。
 
-本文不将以下量视为原始输入，而将其视为**部署求解结果**：
+这里“活跃并发”指同一时刻正在系统内占用资源的请求数，而不是入口 QPS。
 
-- 单实例 GPU 数 $g$
-- 是否分片 $is_{shard}$
-- 部署模式 $mode_{deploy}$
-- 故障单元规模 $G_{fail}$
-- 显存可行性口径 $type_{mem}$
+#### 3.1.2 请求长度画像
 
-### 4.4 单位约定与辅助映射
+为了把业务目标转成 token 吞吐需求，还需要请求长度画像。通常至少需要：
 
-除最终展示外，全文中间计算统一采用：
+- 平均输入长度 $S_{in,avg}$；
+- 平均输出长度 $S_{out,avg}$；
+- P95 输入长度 $S_{in,p95}$；
+- P95 输出长度 $S_{out,p95}$。
 
-- 显存相关量的单位为 $byte$
-- 带宽相关量的单位为 $byte/s$
-- token 长度与吞吐相关量的单位为 $token$、$token/s$
-- 计算量与算力相关量的单位为 $FLOP$、$FLOP/s$
-- 时间单位为 $s$
+如果业务侧只有离散 request shape 分布，例如一组形如“占比 $w_i$、平均输入长度 $S_{in,avg,i}$、平均输出长度 $S_{out,avg,i}$”的桶分布，也可以先由这些桶派生全局统计量。
 
-辅助函数只用于表达**确定映射**，不吸收任何经验假设：
+#### 3.1.3 模型信息
 
-- $b_w$：每个权重参数占用的字节数，由推理精度决定
-- $b_c$：每个 cache 元素占用的字节数，由 cache 精度决定
-- $F_{peak}$：GPU 在当前推理精度下的峰值算力
+模型侧至少需要：
 
-### 4.5 主要记号
+- 总参数量 $P_{total}$；
+- 每个 token 的激活参数量 $P_{act}$；
+- 层数 $L$；
+- 隐藏维度 $H$；
+- attention 结构相关信息，例如 KV 头数、head 维度、MLA latent 维度等；
+- 权重精度和 KV cache 精度。
 
-#### 业务侧记号
+其中 $P_{act}$ 尤其重要。对于 Dense 模型，通常有
 
-- $C_{avg}$：平均活跃并发
-- $C_{peak}$：峰值活跃并发
-- $TTFT_{avg}^{target}$：平均首字延迟目标
-- $TTFT_{p95}^{target}$：P95 首字延迟目标
-- $E2E_{avg}^{target}$：平均单次总时延目标
-- $E2E_{p95}^{target}$：P95 单次总时延目标
+$$
+P_{act}=P_{total}。
+$$
 
-#### 长度侧记号
+对于 MoE 模型，$P_{act}$ 必须理解为**每个 token 实际参与前向的总参数量**，应包含共享层、路由相关开销近似以及被激活 expert 的总和，而不是只填 expert 参数量。
 
-- $S_{in,avg}$：平均输入长度
-- $S_{out,avg}$：平均输出长度
-- $S_{in,p95}$：P95 输入长度
-- $S_{out,p95}$：P95 输出长度
-- $S_{avg}$：平均总长度
-- $S_{p95}$：P95 总长度
+#### 3.1.4 GPU 与部署相关信息
 
-#### 阶段活跃比例
+GPU 侧至少需要：
 
-- $r_{dec,avg}$：平均窗口内处于 decode 阶段的请求比例
-- $r_{dec,peak}$：峰值窗口内处于 decode 阶段的请求比例
-- $r_{pre,peak}$：峰值窗口内处于 prefill 阶段的请求比例
+- 单卡显存容量 $V_{gpu}$；
+- 单卡峰值显存带宽 $B_{mem}$；
+- 单卡在当前精度下的峰值算力 $F_{peak}$。
 
-#### 模型与硬件侧记号
+此外还需要少量采购前可接受的效率系数：
 
-- $P_{total}$：模型总参数量
-- $P_{act}$：每个 token 实际激活参数量
-- $L$：层数
-- $H$：隐藏维度
-- $H_{kv}$：KV 头数
-- $d_{head}$：单个 attention head 的维度
-- $d_{latent}$：MLA latent cache 维度
-- $V_{gpu}$：单卡显存容量
-- $B_{mem}$：单卡峰值显存带宽
-- $\eta_{bw}$：有效带宽利用率
-- $\eta_{cmp}$：有效算力利用率
-- $\eta_{vram}$：可用显存比例
-- $\eta_{inst}$：多卡实例扩展效率
+- 可用显存比例 $\eta_{vram}$；
+- 带宽利用率 $\eta_{bw}$；
+- 算力利用率 $\eta_{cmp}$；
+- 多卡实例扩展效率 $\eta_{inst}$。
 
-#### 显存系数
+这些量都应满足
 
-- $\alpha_w$：权重附加显存系数
-- $\alpha_r$：运行时固定显存系数
+$$
+0<\eta_{vram},\eta_{bw},\eta_{cmp},\eta_{inst}\le 1。
+$$
 
-#### Prefill 代理参数
+它们的作用不是替代建模，而是吸收部署前无法精确展开的实现细节。
 
-- $k_{pre}$：Prefill 相对 Decode 的代理倍率
+#### 3.1.5 显存附加系数与高可用信息
+
+显存建模还需要两个附加系数：
+
+- 权重附加显存系数 $\alpha_w$，用于表示量化元数据、布局、张量包装等额外占用；
+- 运行时固定显存系数 $\alpha_r$，用于近似表示 runtime buffer、框架常驻开销等与权重规模同阶的固定显存。
+
+高可用侧则需要明确：
+
+- 容忍的故障单元数量；或
+- N+1 / 整节点容灾等目标。
+
+### 3.2 合法性校验
+
+进入正式计算前，至少要检查以下条件：
+
+- $C_{peak}\ge C_{avg}>0$；
+- $TTFT_{avg}^{target}>0$，且 $TTFT_{p95}^{target}\ge TTFT_{avg}^{target}$；
+- $E2E_{avg}^{target}>TTFT_{avg}^{target}$；
+- $E2E_{p95}^{target}>TTFT_{p95}^{target}$；
+- 若使用 request shape 权重，则各桶权重满足 $\sum_i w_i=1$；
+- 所有效率系数位于 $(0,1]$ 内。
+
+### 3.3 长度统计的预处理
+
+若输入来自离散 request shape 分布，则全局平均输入、平均输出长度分别为
+
+$$
+S_{in,avg}=\sum_i w_i S_{in,avg,i},
+$$
+
+$$
+S_{out,avg}=\sum_i w_i S_{out,avg,i}。
+$$
+
+若业务侧直接给出了 P95 输入长度 $S_{in,p95}$ 和 P95 输出长度 $S_{out,p95}$，则直接使用；否则应根据离散桶累计占比作近似求取。
+
+后文还会用到总长度统计量。平均总长度写为
+
+$$
+S_{avg}=S_{in,avg}+S_{out,avg}。
+$$
+
+若业务侧单独提供了真实的 P95 总长度，则直接记为 $S_{p95}$。若没有，则采用采购前常用的保守近似：
+
+$$
+S_{p95}=S_{in,p95}+S_{out,p95}。
+$$
+
+这一近似通常偏大，因此会让 cache 与资源测算偏保守。
 
 ---
 
-## 5. 输入条件
+## 4. 由体验目标推导系统需求
 
-### 5.1 输入分类总表
+本阶段回答的问题是：**业务侧给出并发和时延目标后，系统在 Prefill 和 Decode 两个阶段分别至少要提供多少 token 吞吐？**
 
-| 分类 | 是否必填 | 说明 |
-| --- | --- | --- |
-| 业务目标输入 | 是 | 定义业务规模与体验目标 |
-| 模型输入 | 是 | 定义模型结构、规模与精度 |
-| GPU 选择输入 | 是 | 定义 GPU 规格与有效利用率假设 |
-| 推理框架 / 部署档位输入 | 是 | 定义框架选择及少量必要画像参数 |
-| HA 输入 | 是 | 定义高可用目标 |
+### 4.1 建模思路
 
-### 5.2 业务目标输入（必填）
+在线推理请求通常分成两个阶段：
 
-建议至少提供以下内容：
+- **Prefill**：对输入 prompt 做整段前向，决定首字何时出来；
+- **Decode**：逐 token 生成输出，决定生成速度以及从首字到结束的尾部时延。
 
-- 平均活跃并发 $C_{avg}$
-- 峰值活跃并发 $C_{peak}$
-- 平均首字延迟目标 $TTFT_{avg}^{target}$
-- P95 首字延迟目标 $TTFT_{p95}^{target}$
-- 平均单次总时延目标 $E2E_{avg}^{target}$
-- P95 单次总时延目标 $E2E_{p95}^{target}$
-- 请求长度分布 `request_shapes`
-- 平均 decode-active 比例 $r_{dec,avg}$
-- 峰值 decode-active 比例 $r_{dec,peak}$
-- 峰值 prefill-active 比例 $r_{pre,peak}$
-- P95 总长度 $S_{p95}$（若业务侧可直接提供，建议显式给出）
+因此，TTFT 主要约束 Prefill，E2E 与输出长度主要约束 Decode。为了把“时延目标”转换为“吞吐目标”，先把单请求的时间预算拆成两个阶段。
 
-#### 5.2.1 `request_shapes`（最小版，必填）
+### 4.2 平均场景下的单请求需求
 
-```json
-{
-  "request_shapes": [
-    {
-      "name": "short_qa",
-      "weight": 0.6,
-      "input_tokens_avg": 300,
-      "input_tokens_p95": 800,
-      "output_tokens_avg": 120,
-      "output_tokens_p95": 300
-    },
-    {
-      "name": "long_context_summary",
-      "weight": 0.4,
-      "input_tokens_avg": 5000,
-      "input_tokens_p95": 10000,
-      "output_tokens_avg": 400,
-      "output_tokens_p95": 900
-    }
-  ]
-}
-```
-
-约束：
-
-- 所有 $w_i>0$
-- $\sum_i w_i=1$
-- 每个 shape 至少包含名称、权重、平均输入长度、P95 输入长度、平均输出长度、P95 输出长度
-
-#### 5.2.2 Decode-active 比例（必填）
-
-定义域：
+先定义平均 Decode 预算：
 
 $$
-0<r_{dec,avg}\le 1
+T_{dec,avg}=E2E_{avg}^{target}-TTFT_{avg}^{target}。
 $$
 
-$$
-0<r_{dec,peak}\le 1
-$$
+这表示平均场景下，从首字出现到请求完成，系统可分配给 Decode 的时间窗口。
 
-推荐原则：
-
-- 优先由日志窗口统计得到
-- 至少拆分平均与峰值两个口径
-- 不建议继续使用单一比例同时支配平均与峰值计算
-
-#### 5.2.3 Prefill-active 比例（选填，建议显式提供）
-
-定义域：
+Prefill 与 TTFT 并不完全等同，因为 TTFT 还可能包含排队、调度、网络和服务栈开销。采购前若没有额外分解数据，可以引入一个**Prefill 预算占比** $\phi_{pre,avg}$，表示 TTFT 中有多大比例留给模型 Prefill 计算。于是平均单请求所需的 Prefill 速率可写成
 
 $$
-0<r_{pre,peak}\le 1
+R_{pre,req}^{avg}=\frac{S_{in,avg}}{\phi_{pre,avg}\,TTFT_{avg}^{target}}。
 $$
 
-用途：
+其中 $R_{pre,req}^{avg}$ 的单位是输入 token/s。
 
-- 用于把峰值活跃并发折算为同一时间真正竞争 prefill 资源的请求比例
-- 若无法提供，可取保守缺省值
+相应地，平均单请求所需的 Decode 生成速率为
 
 $$
-r_{pre,peak}=1.0
+R_{dec,req}^{avg}=\frac{S_{out,avg}}{T_{dec,avg}}。
 $$
 
-说明：该缺省值会把 prefill 总需求推向上界，通常偏保守。
+这里的单位是输出 token/s。
 
-#### 5.2.4 P95 总长度（选填，强烈建议）
+### 4.3 P95 场景下的单请求需求
 
-用途：
+同理，P95 的 Decode 时间预算为
 
-- 若业务侧可直接给出真实的 P95 总长度，应优先使用
-- 若未提供，则采用保守近似 $S_{p95}=S_{in,p95}+S_{out,p95}$
+$$
+T_{dec,p95}=E2E_{p95}^{target}-TTFT_{p95}^{target}。
+$$
 
-### 5.3 模型输入（必填）
+若使用 P95 的 Prefill 预算占比 $\phi_{pre,p95}$，则 P95 单请求所需的 Prefill 速率为
 
-建议至少提供：
+$$
+R_{pre,req}^{p95}=\frac{S_{in,p95}}{\phi_{pre,p95}\,TTFT_{p95}^{target}}，
+$$
 
-- 模型名称（可选）
-- 架构类型：Dense 或 MoE
-- Attention 类型：MHA / GQA / MQA / MLA / Hybrid
-- 总参数量 $P_{total}$
-- 每 token 激活参数量 $P_{act}$（MoE 必填）
-- 层数 $L$
-- 隐藏维度 $H$
-- Query 头数
-- KV 头数 $H_{kv}$
-- 单 head 维度 $d_{head}$
-- MLA latent cache 维度 $d_{latent}$
-- 最大上下文窗口
-- 权重推理精度
-- KV cache 精度
-- 每 token 每层额外 cache 开销
-- 若可直接给出，则直接输入“每 token 每层 cache 字节数”
+P95 单请求所需的 Decode 生成速率为
 
-对 MoE，$P_{act}$ 的口径必须统一为：
+$$
+R_{dec,req}^{p95}=\frac{S_{out,p95}}{T_{dec,p95}}。
+$$
 
-- 所有每 token 必经的 shared / dense 参数
-- router 及相关公共路径的近似开销
-- top-k 被激活 expert 参数总和
+这里保留 $\phi_{pre,avg}$ 和 $\phi_{pre,p95}$ 的原因是：TTFT 不完全由模型计算组成，这一层预算拆分在采购前很难完全消除。与其把这部分不确定性藏进别的倍率，不如显式保留为一个容易理解、容易讨论的预算参数。
 
-不得只填“被选中的 expert 参数”而遗漏 shared 路径，否则会系统性低估吞吐约束。
+### 4.4 从单请求需求到系统总需求
 
-### 5.4 GPU 选择输入（必填）
+并发请求并不会在任何时刻全部同时处于同一阶段，因此还需要引入两个阶段活跃比例：
 
-建议至少提供：
+- 平均窗口内处于 Decode 阶段的请求比例 $r_{dec,avg}$；
+- 峰值窗口内处于 Decode 阶段的请求比例 $r_{dec,peak}$；
+- 峰值窗口内处于 Prefill 阶段的请求比例 $r_{pre,peak}$。
 
-- GPU 名称
-- 单卡显存容量 $V_{gpu}$
-- 峰值显存带宽 $B_{mem}$
-- FP16 / BF16 / FP8 / INT8 / INT4 峰值算力
-- 有效带宽利用率 $\eta_{bw}$
-- 有效算力利用率 $\eta_{cmp}$
-- 可用显存比例 $\eta_{vram}$
+于是，平均 Decode 总吞吐需求为
 
-推荐默认值（仅无实测时作为采购前基线）：
+$$
+TPS_{dec,target}^{avg}=C_{avg}\,r_{dec,avg}\,R_{dec,req}^{avg}。
+$$
 
-- $\eta_{bw}=0.70$
-- $\eta_{cmp}=0.35$
-- $\eta_{vram}=0.90$
+峰值 Decode 总吞吐需求为
 
-### 5.5 推理框架 / 部署档位输入（必填）
+$$
+TPS_{dec,target}^{peak}=C_{peak}\,r_{dec,peak}\,R_{dec,req}^{p95}。
+$$
 
-建议至少提供：
+峰值 Prefill 总吞吐需求为
 
-- 推理框架及版本
-- 权重附加显存系数 $\alpha_w$
-- 运行时固定显存系数 $\alpha_r$
-- 多卡实例扩展效率 $\eta_{inst}$
-- Prefill 代理倍率 $k_{pre}$
+$$
+TPS_{pre,target}^{peak}=C_{peak}\,r_{pre,peak}\,R_{pre,req}^{p95}。
+$$
 
-推荐默认值：
+这样处理后，Prefill 与 Decode 的需求推导口径是一致的：都是“**总活跃并发 × 该阶段活跃占比 × 单请求阶段速率需求**”。
 
-- $\alpha_w=0.05$
-- $\alpha_r=0.10$
-- 单卡实例时 $\eta_{inst}=1.00$
-- 多卡实例且无实测值时，可取 $\eta_{inst}=0.85$
-- 无实测值时，可取 $k_{pre}=1.5$
-
-说明：
-
-- $\alpha_w$ 只吸收与权重驻留直接相关的附加显存，例如量化元数据、布局与对齐开销。
-- $\alpha_r$ 只吸收运行时长期占用的固定显存，例如 workspace、allocator 预留、运行时 buffer 等。
-- $\eta_{vram}$ 只吸收 OOM 安全水位、波动预留与运营安全边界，不应与前两者重复计入。
-- $\eta_{inst}$ 仅在 $g>1$ 时参与吞吐计算，用于吸收跨卡通信与并行切分导致的非线性扩展损失。
-- $k_{pre}$ 不是物理常数，而是用于采购前估算的代理参数；若已有实测 prefill 吞吐，应直接替换代理模型。
-
-#### 5.5.1 采购前推荐档位
-
-若缺少实测值，建议至少同时评估保守档与中性档，避免把单点默认值误当真值。
-
-| 档位 | $\eta_{bw}$ | $\eta_{cmp}$ | $\alpha_w$ | $\alpha_r$ | $\eta_{inst}$（多卡） | $k_{pre}$ |
-| --- | --- | --- | --- | --- | --- | --- |
-| 保守 | 0.60 | 0.25 | 0.08 | 0.15 | 0.75 | 1.0 |
-| 中性 | 0.70 | 0.35 | 0.05 | 0.10 | 0.85 | 1.5 |
-| 乐观 | 0.80 | 0.45 | 0.03 | 0.06 | 0.90 | 2.0 |
-
-说明：
-
-- 单卡实例固定取 $\eta_{inst}=1.0$
-- 采购前正式输出至少应给出保守档与中性档两组结果
-- 若后续拿到框架实测或压测结果，应优先以实测值回填这些参数
-
-### 5.6 HA 输入（必填）
-
-建议至少提供：
-
-- HA 模式：无 HA / N+1 / 容忍故障单元 / 容忍整节点
-- 需容忍的故障单元数
-- 单节点 GPU 数（若按节点维度做 HA，建议提供）
+若业务侧缺少阶段活跃比例，可取保守近似，例如将 $r_{pre,peak}$ 取为 1。但应明确，这会使 Prefill 约束变得更保守。
 
 ---
 
-## 6. 输入校验与基础派生
+## 5. 单实例显存建模
 
-### 6.1 合法性校验
+本阶段回答的问题是：**一个实例至少需要几张 GPU 才能装下模型？装下后还能为活跃请求留下多少 KV cache 空间？**
 
-至少应校验：
-
-- $C_{avg}>0$
-- $C_{peak}\ge C_{avg}$
-- $TTFT_{avg}^{target}>0$
-- $TTFT_{p95}^{target}\ge TTFT_{avg}^{target}$
-- $E2E_{avg}^{target}>TTFT_{avg}^{target}$
-- $E2E_{p95}^{target}>TTFT_{p95}^{target}$
-- $0<r_{dec,avg}\le 1$
-- $0<r_{dec,peak}\le 1$
-- $0<r_{pre,peak}\le 1$
-- $0<\eta_{vram}\le 1$
-- $0<\eta_{bw}\le 1$
-- $0<\eta_{cmp}\le 1$
-- $0<\eta_{inst}\le 1$
-- $k_{pre}>0$
-- $\sum_i w_i=1$
-
-### 6.2 从 `request_shapes` 派生全局长度统计
-
-全局平均输入长度：
-
-$$
-S_{in,avg}=\sum_i w_i\,S_{in,avg,i}
-$$
-
-全局平均输出长度：
-
-$$
-S_{out,avg}=\sum_i w_i\,S_{out,avg,i}
-$$
-
-全局 P95 输入与输出长度：
-
-- 若有原始离散桶分布，可按累计分位近似求取
-- 若仅有少量离散 shape，工程上可取“高位主导 shape”的保守近似
-
-记最终派生结果为：
-
-- $S_{in,p95}$
-- $S_{out,p95}$
-
-### 6.3 总长度 P95
-
-优先顺序：
-
-1. 若业务侧单独提供真实的 P95 总长度，优先使用。
-2. 若未提供，则保守近似：
-
-$$
-S_{p95}=S_{in,p95}+S_{out,p95}
-$$
-
-说明：该近似通常大于真实总长度 P95，因此偏保守。
-
-### 6.4 基础总长度
-
-平均总长度：
-
-$$
-S_{avg}=S_{in,avg}+S_{out,avg}
-$$
-
-P95 总长度：
-
-$$
-S_{p95}=\begin{cases}
-S_{p95}^{given}, & \text{若业务侧已提供}\\
-S_{in,p95}+S_{out,p95}, & \text{否则采用保守近似}
-\end{cases}
-$$
-
----
-
-## 7. 从体验目标到系统需求
-
-### 7.1 平均阶段预算
-
-平均 decode 预算：
-
-$$
-T_{dec,avg}=E2E_{avg}^{target}-TTFT_{avg}^{target}
-$$
-
-默认平均 prefill 预算份额：
-
-$$
-\phi_{pre,avg}=0.8
-$$
-
-平均单请求 prefill 速率需求：
-
-$$
-R_{pre,req}^{avg}=\frac{S_{in,avg}}{TTFT_{avg}^{target}\times \phi_{pre,avg}}
-$$
-
-平均单请求 decode 生成速率需求：
-
-$$
-R_{dec,req}^{avg}=\frac{S_{out,avg}}{T_{dec,avg}}
-$$
-
-### 7.2 P95 阶段预算
-
-P95 decode 预算采用工程预算近似：
-
-$$
-T_{dec,p95}=E2E_{p95}^{target}-TTFT_{p95}^{target}
-$$
-
-默认 P95 prefill 预算份额：
-
-$$
-\phi_{pre,p95}=0.8
-$$
-
-P95 单请求 prefill 速率需求：
-
-$$
-R_{pre,req}^{p95}=\frac{S_{in,p95}}{TTFT_{p95}^{target}\times \phi_{pre,p95}}
-$$
-
-P95 单请求 decode 生成速率需求：
-
-$$
-R_{dec,req}^{p95}=\frac{S_{out,p95}}{T_{dec,p95}}
-$$
-
-说明：
-
-- $\phi_{pre,avg}$ 与 $\phi_{pre,p95}$ 是将 TTFT 预算映射为 prefill 需求的工程缺省值。
-- 若业务侧或框架侧已有更合适的预算拆分口径，应优先替换默认值。
-
-### 7.3 系统总吞吐需求
-
-平均 decode 总吞吐需求：
-
-$$
-TPS_{dec,target}^{avg}=C_{avg}\times r_{dec,avg}\times R_{dec,req}^{avg}
-$$
-
-峰值 decode 总吞吐需求：
-
-$$
-TPS_{dec,target}^{peak}=C_{peak}\times r_{dec,peak}\times R_{dec,req}^{p95}
-$$
-
-峰值 prefill 总吞吐需求：
-
-$$
-TPS_{pre,target}^{peak}=C_{peak}\times r_{pre,peak}\times R_{pre,req}^{p95}
-$$
-
-说明：
-
-- Prefill 与 Decode 在系统总需求推导中采用对称口径。
-- 若无法提供 $r_{pre,peak}$，可取保守缺省值 $1.0$。
-- 更严格的做法应使用请求到达率、burst 窗口与阶段驻留时间来建模；在缺少这些数据时，本文采用 active-ratio 近似。
-
----
-
-## 8. 单实例显存模型
-
-### 8.1 权重显存
-
-原始权重字节数：
-
-$$
-M_w^{raw}=P_{total}\times b_w
-$$
-
-考虑权重格式、量化元数据与布局附加开销后的权重显存：
-
-$$
-M_w=M_w^{raw}(1+\alpha_w)
-$$
-
-说明：
-
-- $\alpha_w$ 应保持为小比例系数，默认用于采购前预估。
-- 若框架实测可直接给出模型加载后的稳定驻留显存，应优先以实测值替换该系数。
-
-### 8.2 每个 token、每层的 cache 字节数
-
-记每个 token 在单层上占用的 cache 字节数为 $e_{cache}$。
-
-若可直接给出该值，则直接使用：
-
-$$
-e_{cache}=e_{cache}^{given}
-$$
-
-否则可按 attention 结构近似计算：
-
-- MHA：
-
-$$
-e_{cache}=2H\,b_c+e_{aux}
-$$
-
-- GQA：
-
-$$
-e_{cache}=2H_{kv}d_{head}\,b_c+e_{aux}
-$$
-
-- MQA：
-
-$$
-e_{cache}=2d_{head}\,b_c+e_{aux}
-$$
-
-- MLA：
-
-$$
-e_{cache}=d_{latent}\,b_c+e_{aux}
-$$
-
-- Hybrid Attention：
-
-若各层结构不同，则对每层分别计算 $e_{cache}^{(l)}$，再按层求和；若无法提供逐层结构信息，则应直接输入 $e_{cache}$。
-
-### 8.3 单请求 cache 显存
-
-对给定序列长度 $S$：
-
-$$
-M_{cache,req}(S)=L\times S\times e_{cache}
-$$
-
-若为 Hybrid Attention 且使用逐层求和，则：
-
-$$
-M_{cache,req}(S)=S\sum_{l=1}^{L} e_{cache}^{(l)}
-$$
-
-### 8.4 运行时固定显存
-
-$$
-M_r=\alpha_r M_w
-$$
-
-说明：这是采购前常用的经验代理，不表示运行时固定显存与权重之间存在严格物理线性关系。
-
-### 8.5 单实例总显存组成
+### 5.1 建模思路
 
 单实例显存由三部分组成：
 
-$$
-M_{inst}=M_w+M_r+M_{cache,active}
-$$
+1. 权重静态驻留显存；
+2. 运行时固定显存；
+3. 活跃请求占用的 KV cache 显存。
 
-其中：
+只要前两部分都装不下，该实例规模就不可行；前两部分装下之后，剩余显存才可用于承载活跃请求的 cache。
 
-- $M_w$：权重静态驻留显存
-- $M_r$：运行时长期固定显存
-- $M_{cache,active}$：活跃请求占用的 cache 显存
+### 5.2 权重显存
 
-采购前 sizing 中，后续通过单实例 cache 容量上限反推可承载请求数，而不在此处预设单实例请求数。
-
-### 8.6 单实例显存可行性
-
-#### 8.6.1 单卡完整装载场景
-
-当 $g=1$ 时，单实例可用显存为：
+设权重精度对应每个参数占用 $b_w$ 个字节，则原始权重字节数为
 
 $$
-M_{use}=V_{gpu}\times \eta_{vram}
+M_w^{raw}=P_{total} b_w。
 $$
 
-若：
+考虑量化元数据、布局和封装后的附加开销后，权重显存写为
 
 $$
-M_w+M_r\ge M_{use}
+M_w=M_w^{raw}(1+\alpha_w)。
 $$
 
-则单卡完整装载不可行。
+这里的 $\alpha_w$ 是采购前的经验附加系数。若框架实测能直接给出模型加载后的稳定权重驻留显存，应优先用实测值替代。
 
-单实例可承载 cache 容量：
+### 5.3 每个 token 的 cache 字节数
 
-$$
-M_{cache,cap}=M_{use}-M_w-M_r
-$$
+设 cache 精度对应每个 cache 元素占用 $b_c$ 个字节。记单个 token 在**单层**占用的 cache 字节数为 $e_{cache}$。
 
-该场景下：
+如果已知模型的 attention 结构，可以按结构近似计算：
 
-- $mode_{deploy}=$ 单卡完整装载
-- $type_{mem}=$ 严格可行
-
-#### 8.6.2 多卡分片场景
-
-当 $g>1$ 时，本文在前期 sizing 中采用**实例级 pooled / sharded 可行性上界**近似：
+- 对 MHA，通常可写成
 
 $$
-M_{use}=g\times V_{gpu}\times \eta_{vram}
+e_{cache}=2H b_c + e_{aux};
 $$
 
-若：
+- 对 GQA，若 KV 头数为 $H_{kv}$，单头维度为 $d_{head}$，则
 
 $$
-M_w+M_r\ge M_{use}
+e_{cache}=2H_{kv} d_{head} b_c + e_{aux};
 $$
 
-则当前 $g$ 不可行。
-
-单实例可承载 cache 容量：
+- 对 MQA，则近似为
 
 $$
-M_{cache,cap}=M_{use}-M_w-M_r
+e_{cache}=2 d_{head} b_c + e_{aux};
 $$
 
-该场景下：
+- 对 MLA，若 latent cache 维度为 $d_{latent}$，则近似为
 
-- $mode_{deploy}=$ 多卡分片装载
-- $type_{mem}=$ 分片上界可行
+$$
+e_{cache}=d_{latent} b_c + e_{aux}。
+$$
 
-说明：此处更适合作为多卡 / sharded 方案的前期可行性判断，而不应被解读为 replicated 多卡实例的严格显存证明。
+这里的 $e_{aux}$ 用于表示页表、索引、对齐等辅助开销。若框架或模型文档能直接给出每 token 每层 cache 字节数，则直接使用，不必再分结构推导。
+
+### 5.4 单请求 cache 显存
+
+当一个请求的总序列长度为 $S$ 时，其 cache 显存近似为
+
+$$
+M_{cache,req}(S)=L\,S\,e_{cache}。
+$$
+
+若是 hybrid attention，且不同层使用不同 cache 结构，则更一般的写法为
+
+$$
+M_{cache,req}(S)=S\sum_{l=1}^{L} e_{cache}^{(l)}。
+$$
+
+### 5.5 运行时固定显存
+
+运行时固定显存记为 $M_r$。采购前若没有实测值，可用权重显存按比例近似：
+
+$$
+M_r=\alpha_r M_w。
+$$
+
+这不是物理定律，只是一个便于前期预算的代理写法。若已有稳定观测值，应优先替换。
+
+### 5.6 单实例显存可行性
+
+设一个实例由 $g$ 张 GPU 组成，则该实例可用显存近似为
+
+$$
+M_{use}=g\,V_{gpu}\,\eta_{vram}。
+$$
+
+若
+
+$$
+M_w+M_r\ge M_{use}，
+$$
+
+则当前实例规模 $g$ 在显存上不可行。
+
+若显存可行，则该实例可用于承载活跃请求 cache 的容量为
+
+$$
+M_{cache,cap}=M_{use}-M_w-M_r。
+$$
+
+这里需要强调：
+
+- 当 $g=1$ 时，这一判定是单卡完整装载的严格显存判定；
+- 当 $g>1$ 时，这一判定是**多卡分片场景的实例级可行性上界**，适用于采购前 sizing，不应被误解为 replicated 多卡部署下的严格显存证明。
+
+### 5.7 单实例在显存上的请求承载能力
+
+为了在后文由显存约束反推实例数，需要知道单实例最多能容纳多少个“保守长度”的活跃请求。
+
+取保守长度为 $S_{p95}$，则单实例在显存约束下可承载的请求数上界为
+
+$$
+N_{req}^{mem}=\left\lfloor\frac{M_{cache,cap}}{M_{cache,req}(S_{p95})}\right\rfloor。
+$$
+
+这里的“上界”是针对一种保守场景：假定每个活跃请求都已经占满 P95 总长度的 cache。它并不是线上真实并发上限，但非常适合采购前容量测算。
 
 ---
 
-## 9. 单实例吞吐模型
+## 6. 单实例吞吐建模
 
-### 9.1 激活参数量定义
+本阶段回答的问题是：**在显存可行的前提下，一个实例在 Decode 和 Prefill 两个阶段分别能提供多少 token 吞吐？**
 
-令：
+### 6.1 建模总思路
 
-- Dense：$P_{act}=P_{total}$
-- MoE：$P_{act}$ 为每 token 实际激活参数量
+对在线推理，吞吐一般同时受两类瓶颈约束：
 
-### 9.2 Decode 单实例吞吐
+- **显存带宽约束**：单位 token 需要搬运多少权重 / 状态数据；
+- **算力约束**：单位 token 需要执行多少 FLOPs。
 
-单个 token 的近似访存量：
-
-$$
-b_{dec}=P_{act}\times b_w
-$$
-
-单个 token 的近似计算量：
+因此，无论 Prefill 还是 Decode，单实例吞吐都写成“访存上界”和“算力上界”二者取小：
 
 $$
-f_{dec}=2P_{act}
+TPS=\min(TPS_{mem},TPS_{cmp})。
 $$
 
-内存受限近似：
+这样做的好处是结构统一，也便于快速定位模型偏差究竟来自“带宽假设”还是“计算量假设”。
+
+### 6.2 Decode 吞吐
+
+#### 6.2.1 建模说明
+
+Decode 阶段一次只生成一个新 token。对大模型在线推理，这一阶段常常需要重复读取大量活跃权重，而每步新增的计算规模相对固定，因此通常更容易接近 memory-bound。
+
+#### 6.2.2 单 GPU 的 Decode 吞吐
+
+将单个输出 token 的近似权重访存量写为
 
 $$
-TPS_{dec,mem}^{gpu}=\frac{B_{mem}\eta_{bw}}{b_{dec}}
+b_{dec}=P_{act} b_w，
 $$
 
-算力受限近似：
+将单个输出 token 的近似计算量写为
 
 $$
-TPS_{dec,cmp}^{gpu}=\frac{F_{peak}\eta_{cmp}}{f_{dec}}
+f_{dec}=2P_{act}。
 $$
 
-单 GPU decode 吞吐：
+于是，单 GPU 的带宽上界为
 
 $$
-TPS_{dec}^{gpu}=\min\left(TPS_{dec,mem}^{gpu},\,TPS_{dec,cmp}^{gpu}\right)
+TPS_{dec,mem}^{gpu}=\frac{B_{mem}\eta_{bw}}{b_{dec}}，
 $$
 
-若 $g=1$，取 $\eta_{inst}=1.0$。
-
-单实例 decode 吞吐：
+单 GPU 的算力上界为
 
 $$
-TPS_{dec}^{inst}=g\times TPS_{dec}^{gpu}\times \eta_{inst}
+TPS_{dec,cmp}^{gpu}=\frac{F_{peak}\eta_{cmp}}{f_{dec}}。
 $$
 
-说明：
-
-- 上式是前期 sizing 近似，attention、norm、rope、softmax、MLA 等额外 FLOPs 与 IO 被吸收到有效利用率与实例扩展效率中。
-- 多卡场景默认各卡承担近似均衡的 shard 工作量，且跨卡同步开销已被 $\eta_{inst}$ 吸收；不适用于明显异构并行或流水并行瓶颈主导的场景。
-- 若有实测值，应优先替换。
-- 对大模型在线推理，decode 常更偏 memory-bound，因此 $\eta_{bw}$ 往往比 $\eta_{cmp}$ 更敏感。
-
-### 9.3 Prefill 单实例吞吐
-
-#### 9.3.1 定位
-
-Prefill 与 Decode 的计算 / 访存机理并不相同。尤其是：
-
-- Prefill 会显著受序列长度影响。
-- Attention 计算模式与 Decode 不同。
-- Prefill 往往具有更高的 GEMM 利用率与更强的计算密度。
-
-因此，本文**不把 Prefill 写成与 Decode 同构的严格推导公式**，而是采用采购前可落地的**代理模型**。
-
-#### 9.3.2 基线代理
-
-先以 Decode 单 GPU 吞吐作为基线：
+单 GPU Decode 吞吐取两者较小：
 
 $$
-TPS_{pre}^{gpu}=k_{pre}\times TPS_{dec}^{gpu}
+TPS_{dec}^{gpu}=\min\left(TPS_{dec,mem}^{gpu},\,TPS_{dec,cmp}^{gpu}\right)。
 $$
 
-再得到单实例 Prefill 代理吞吐：
+#### 6.2.3 单实例的 Decode 吞吐
+
+若一个实例由 $g$ 张 GPU 组成，则单实例的 Decode 吞吐近似为
 
 $$
-TPS_{pre}^{inst}=g\times TPS_{pre}^{gpu}\times \eta_{inst}
+TPS_{dec}^{inst}=g\,TPS_{dec}^{gpu}\,\eta_{inst}。
 $$
 
-说明：
+这里的 $\eta_{inst}$ 用于吸收实例内分片带来的同步与扩展损失。若 $g=1$，可取 $\eta_{inst}=1$。
 
-- $k_{pre}$ 用于表达“Prefill 相比 Decode 的工程代理倍率”。
-- 它不是物理常数，也不意味着 Prefill 真正按该倍率线性成立。
-- 若已有框架实测 Prefill 吞吐，应直接用实测值替换本节代理模型。
-- 若后续需要更高精度，可改为按序列长度区间建立 $TPS_{pre}(S)$ 分段模型，或直接按 benchmark 表插值。
+### 6.3 Prefill 吞吐
+
+#### 6.3.1 为什么不能用 Decode 倍率代理
+
+Prefill 与 Decode 的主要区别是：
+
+1. Prefill 处理的是一整段输入长度为 $S$ 的序列，而不是一个 token；
+2. 同一次矩阵乘中，权重会被整段输入复用，因此单位输入 token 的权重访存成本会随着 $S$ 增大而下降；
+3. self-attention 会引入随序列长度增长的额外计算量。
+
+因此，Prefill 吞吐不能简单写成“Decode 吞吐乘一个倍率”。那样虽然形式简洁，但会把一个难以验证的新超参数引入主公式，失去采购前测算方法的可解释性。
+
+#### 6.3.2 单次 Prefill 的工作量
+
+设某次 Prefill 的输入长度为 $S$。
+
+对线性层、MLP、MoE 主体等“与 token 数线性相关”的部分，总计算量近似为
+
+$$
+F_{body}^{pre}(S)\approx 2P_{act}S。
+$$
+
+对 self-attention 部分，若按每层的 $QK^\top$ 与 $AV$ 近似，其额外计算量可写成
+
+$$
+F_{attn}^{pre}(S)\approx 4LHS^2。
+$$
+
+于是，单次 Prefill 的总计算量近似为
+
+$$
+F_{pre}(S)\approx 2P_{act}S+4LHS^2。
+$$
+
+将它除以输入长度 $S$，得到**每个输入 token 的平均计算量**：
+
+$$
+f_{pre}(S)=\frac{F_{pre}(S)}{S}\approx 2P_{act}+4LHS。
+$$
+
+这一步很关键。它显示了 Prefill 与 Decode 的本质区别：Decode 的单位 token 计算量近似常数，而 Prefill 的单位 token 计算量会随输入长度线性增大一个 attention 项。
+
+#### 6.3.3 单 GPU 的 Prefill 吞吐
+
+对于访存部分，可以将“读取一遍激活权重，服务整段输入”作为近似，因此每个输入 token 分摊到的平均权重访存量为
+
+$$
+b_{pre}(S)=\frac{P_{act}b_w}{S}。
+$$
+
+于是，单 GPU 的带宽上界为
+
+$$
+TPS_{pre,mem}^{gpu}(S)=\frac{B_{mem}\eta_{bw}}{b_{pre}(S)}=\frac{B_{mem}\eta_{bw}S}{P_{act}b_w}。
+$$
+
+单 GPU 的算力上界为
+
+$$
+TPS_{pre,cmp}^{gpu}(S)=\frac{F_{peak}\eta_{cmp}}{f_{pre}(S)}=\frac{F_{peak}\eta_{cmp}}{2P_{act}+4LHS}。
+$$
+
+因此，单 GPU 的 Prefill 吞吐为
+
+$$
+TPS_{pre}^{gpu}(S)=\min\left(TPS_{pre,mem}^{gpu}(S),\,TPS_{pre,cmp}^{gpu}(S)\right)。
+$$
+
+#### 6.3.4 单实例的 Prefill 吞吐
+
+单实例的 Prefill 吞吐近似为
+
+$$
+TPS_{pre}^{inst}(S)=g\,TPS_{pre}^{gpu}(S)\,\eta_{inst}。
+$$
+
+在后文用于资源求解时，通常取 $S=S_{in,p95}$，即用 P95 输入长度评估峰值 Prefill 能力。
+
+#### 6.3.5 这一模型的意义与边界
+
+这套 Prefill 模型只使用本文已经引入的模型结构量、GPU 参数和效率系数，不再额外引入难以获取的新倍率参数；同时它又能表达两个重要趋势：
+
+- 输入越长，单位输入 token 的权重访存被摊薄得越厉害；
+- 输入越长，attention 计算越容易成为主导项。
+
+它仍然是采购前近似，而不是完整性能仿真。norm、rope、softmax、MLA 细节、路由与 kernel 实现差异仍然被吸收到 $P_{act}$、$\eta_{cmp}$ 和 $\eta_{inst}$ 中。
 
 ---
 
-## 10. 部署方案求解
+## 7. 部署方案与集群规模求解
 
-### 10.1 总原则
+本阶段回答的问题是：**一个实例应由几张 GPU 组成？总共需要多少实例和 GPU 才能满足业务目标？**
 
-部署模式不是用户输入，而是测算过程中的自动推断结果。
+### 7.1 部署求解的基本原则
 
-部署求解接收业务目标、模型参数、GPU 规格、框架档位与 HA 目标，并自动求解最小可行部署方案。
-
-### 10.2 候选实例能力计算
-
-从 $g=1$ 开始，依次枚举候选实例规模；若单卡不可行，再继续枚举：
+实例规模 $g$ 不是预先指定的输入，而是求解结果。测算应从
 
 $$
-g\in\{2,4,8,\ldots\}
+g\in\{1,2,4,8,\dots\}
 $$
 
-对每个候选 $g$，只做三类计算：
+这样的候选集合开始逐个枚举。
 
-1. **显存可行性计算**：判断是否可容纳 $M_w+M_r$，并求出 $M_{cache,cap}$。
-2. **单实例能力计算**：估算 $TPS_{pre}^{inst}$ 与 $TPS_{dec}^{inst}$。
-3. **故障单元归属**：确定该候选下的 $G_{fail}$。
+对于每个候选 $g$，只做三件事：
 
-注意：
+1. 检查显存是否可行；
+2. 计算该实例的 Prefill 与 Decode 吞吐能力；
+3. 再由这些能力反推需要多少实例。
 
-- 这一阶段不判断“单实例是否满足业务总需求”。
-- 业务总需求由后续**实例数求解**完成。
-- 因此这里不存在“先知道每实例分担多少业务，再判断实例是否可行”的循环依赖。
+这样做可以避免循环依赖。因为“单实例能否服务整个业务”本来就不是一个合理判断条件，业务总需求本来就是通过多个实例横向叠加来满足的。
 
-### 10.3 候选方案类型判定
+### 7.2 三条主约束对应的实例数
 
-若候选为单卡且显存可行，则：
+#### 7.2.1 Decode 约束
 
-- $g=1$
-- $is_{shard}=false$
-- $mode_{deploy}=$ 单卡完整装载
-- $type_{mem}=$ 严格可行
-
-若候选为多卡且显存可行，则：
-
-- $is_{shard}=true$
-- $mode_{deploy}=$ 多卡分片装载
-- $type_{mem}=$ 分片上界可行
-
-### 10.4 故障单元推导
-
-- 若单卡独立实例：通常 $G_{fail}=1$
-- 若多卡强耦合实例：通常 $G_{fail}=g$
-- 若按整节点绑定故障：可取 $G_{fail}=G_{node}$
-
-### 10.5 候选方案选择原则
-
-对所有可行候选，先分别求出其：
-
-- $N_{inst}^{mem}$
-- $N_{inst}^{pre}$
-- $N_{inst}^{dec}$
-- $N_{inst}^{biz}$
-- $G_{biz}$
-
-再选择业务所需 GPU 数最小的方案；若多方案 $G_{biz}$ 相同，则优先：
-
-1. 单卡完整装载方案
-2. 故障单元更小的方案
-3. 具有更高吞吐冗余的方案
-
----
-
-## 11. 业务所需实例数与 GPU 数
-
-### 11.1 Decode 约束实例数
+若单实例 Decode 吞吐为 $TPS_{dec}^{inst}$，则为了满足峰值 Decode 需求，至少需要
 
 $$
 N_{inst}^{dec}=\left\lceil\frac{TPS_{dec,target}^{peak}}{TPS_{dec}^{inst}}\right\rceil
 $$
 
-### 11.2 Prefill 约束实例数
+个实例。
+
+#### 7.2.2 Prefill 约束
+
+用 P95 输入长度下的 Prefill 吞吐评估峰值能力，则为了满足峰值 Prefill 需求，至少需要
 
 $$
-N_{inst}^{pre}=\left\lceil\frac{TPS_{pre,target}^{peak}}{TPS_{pre}^{inst}}\right\rceil
+N_{inst}^{pre}=\left\lceil\frac{TPS_{pre,target}^{peak}}{TPS_{pre}^{inst}(S_{in,p95})}\right\rceil
 $$
 
-### 11.3 显存约束实例数
+个实例。
 
-先计算单实例在峰值保守场景下可承载的请求数上界：
+#### 7.2.3 显存约束
 
-$$
-N_{req}^{mem}=\left\lfloor\frac{M_{cache,cap}}{M_{cache,req}(S_{p95})}\right\rfloor
-$$
-
-若：
-
-$$
-N_{req}^{mem}\le 0
-$$
-
-则当前实例方案不可行。
-
-显存约束实例数：
+若单实例在显存上最多承载 $N_{req}^{mem}$ 个保守长度请求，则为了容纳峰值活跃并发，至少需要
 
 $$
 N_{inst}^{mem}=\left\lceil\frac{C_{peak}}{N_{req}^{mem}}\right\rceil
 $$
 
-说明：
+个实例。
 
-- 这里的 $N_{req}^{mem}$ 是“每个活跃请求都按 P95 总长度占满 cache”的保守可承载请求数上界。
-- 它不是线上真实可承载并发的严格最大值。
+若 $N_{req}^{mem}\le 0$，则当前实例规模在显存上直接不可行。
 
-### 11.4 业务实例数与业务 GPU 数
+### 7.3 业务最小实例数与业务 GPU 数
 
-$$
-N_{inst}^{biz}=\max\left(N_{inst}^{dec},N_{inst}^{pre},N_{inst}^{mem}\right)
-$$
+显存、Prefill、Decode 三条约束必须同时满足，因此业务所需的最小实例数为
 
 $$
-G_{biz}=N_{inst}^{biz}\times g
+N_{inst}^{biz}=\max\left(N_{inst}^{mem},\,N_{inst}^{pre},\,N_{inst}^{dec}\right)。
 $$
 
-说明：
-
-- 这是采购前阶段的业务最小 GPU 数。
-- 它已经综合了显存、prefill、decode 三条主约束。
-
----
-
-## 12. 高可用展开
-
-### 12.1 HA 后实例数
-
-- 无 HA：
+对应的业务最小 GPU 数为
 
 $$
-N_{inst}^{final}=N_{inst}^{biz}
+G_{biz}=N_{inst}^{biz}g。
 $$
 
-- 容忍故障单元：
+### 7.4 多候选方案中的选择规则
+
+若多个候选 $g$ 都可行，则可按以下顺序选型：
+
+1. 先选 $G_{biz}$ 最小的方案；
+2. 若 $G_{biz}$ 相同，优先选择单卡完整装载方案；
+3. 若仍相同，优先故障单元更小的方案；
+4. 若仍相同，优先吞吐冗余更大的方案。
+
+这一规则兼顾采购成本、部署简单性和高可用风险。
+
+### 7.5 高可用展开
+
+若业务最小实例数为 $N_{inst}^{biz}$，高可用后的最终实例数记为 $N_{inst}^{final}$。
+
+- 无额外高可用要求时，
 
 $$
-N_{inst}^{final}=N_{inst}^{biz}+\left\lceil\frac{N_{fail}\times G_{fail}}{g}\right\rceil
+N_{inst}^{final}=N_{inst}^{biz}；
 $$
 
-其中 $N_{fail}$ 为需容忍的故障单元数。
+- 若需要容忍若干故障单元，可在 $N_{inst}^{biz}$ 之上额外增加冗余实例；
+- 若采用 N+1，可直接至少增加 1 个实例；
+- 若按整节点容灾，则应按节点粒度把故障单元折算成实例数。
 
-- 容忍整节点：需按节点粒度折算。
-- N+1：可按至少增加 1 个实例处理。
-
-### 12.2 最终 GPU 数
-
-$$
-G_{final}=N_{inst}^{final}\times g
-$$
-
-说明：
-
-- $G_{biz}$ 用于业务承载。
-- $G_{final}$ 用于采购与最终资源预留。
-
----
-
-## 13. 基于已推导 GPU 数的预期效果反推
-
-本章用于 sanity check，不作为采购前测算的主决策依据。
-
-### 13.1 集群吞吐能力
-
-业务集群 decode 吞吐：
+最终采购 GPU 数为
 
 $$
-TPS_{dec}^{cluster}=N_{inst}^{biz}\times TPS_{dec}^{inst}
-$$
-
-业务集群 prefill 吞吐：
-
-$$
-TPS_{pre}^{cluster}=N_{inst}^{biz}\times TPS_{pre}^{inst}
-$$
-
-### 13.2 可持续并发能力
-
-先定义 decode-active 可持续并发：
-
-$$
-C_{dec}^{sus}=\frac{TPS_{dec}^{cluster}}{R_{dec,req}^{p95}}
-$$
-
-再折算总活跃并发：
-
-$$
-C_{total,dec}^{sus}=\frac{C_{dec}^{sus}}{r_{dec,peak}}
-$$
-
-Prefill-active 可持续并发：
-
-$$
-C_{pre}^{sus}=\frac{TPS_{pre}^{cluster}}{R_{pre,req}^{p95}}
-$$
-
-再折算总活跃并发：
-
-$$
-C_{total,pre}^{sus}=\frac{C_{pre}^{sus}}{r_{pre,peak}}
-$$
-
-最终可持续并发能力：
-
-$$
-C^{sus}=\min\left(C_{total,dec}^{sus},C_{total,pre}^{sus}\right)
-$$
-
-### 13.3 单请求生成速度
-
-$$
-V_{gen}\approx\frac{TPS_{dec}^{cluster}}{C_{peak}\times r_{dec,peak}}
-$$
-
-### 13.4 平均时延近似
-
-平均 TTFT 近似：
-
-$$
-TTFT_{avg}^{est}\approx\frac{S_{in,avg}}{TPS_{pre}^{cluster}/\left(C_{avg}\times r_{pre,peak}\right)}
-$$
-
-平均 E2E 近似：
-
-$$
-E2E_{avg}^{est}\approx \frac{S_{in,avg}}{TPS_{pre}^{cluster}/\left(C_{avg}\times r_{pre,peak}\right)}+\frac{S_{out,avg}}{TPS_{dec}^{cluster}/\left(C_{avg}\times r_{dec,avg}\right)}
-$$
-
-说明：
-
-- 若只有峰值 prefill-active 比例而缺少平均口径，平均时延反推中可暂用 $r_{pre,peak}$ 代替，结果偏保守。
-- 该式是工程近似与 sanity check，不是队列论严格推导。
-
-### 13.5 保守 P95 时延近似
-
-$$
-TTFT_{p95}^{upper}\approx\frac{S_{in,p95}}{TPS_{pre}^{cluster}/\left(C_{peak}\times r_{pre,peak}\right)}
-$$
-
-$$
-E2E_{p95}^{upper}\approx \frac{S_{in,p95}}{TPS_{pre}^{cluster}/\left(C_{peak}\times r_{pre,peak}\right)}+\frac{S_{out,p95}}{TPS_{dec}^{cluster}/\left(C_{peak}\times r_{dec,peak}\right)}
-$$
-
-### 13.6 每日产能
-
-$$
-Q_{dec}^{day}=TPS_{dec}^{cluster}\times 86400
-$$
-
-$$
-Q_{pre}^{day}=TPS_{pre}^{cluster}\times 86400
+G_{final}=N_{inst}^{final}g。
 $$
 
 ---
 
-## 14. 输出项建议
+## 8. 基于已求解资源规模的效果反推
 
-### 14.1 输入摘要
+本阶段不是主决策，而是用于检查前面推导出来的资源规模与业务目标是否一致。若反推结果明显偏离输入目标，应回头检查：
 
-- 并发、TTFT、E2E 目标
-- `request_shapes` 摘要
-- Decode-active 比例与 Prefill-active 比例
-- 模型 / GPU / 框架 / HA 选择
-- 是否使用默认值及其清单
+- 长度画像是否过于乐观或保守；
+- Prefill 预算占比是否合理；
+- 活跃比例是否设置错误；
+- 显存或吞吐模型中的结构参数是否填错。
 
-### 14.2 部署求解结果
+### 8.1 集群总吞吐能力
 
-- 单实例 GPU 数 $g$
-- 是否分片 $is_{shard}$
-- 部署模式 $mode_{deploy}$
-- 显存可行性口径 $type_{mem}$
-- 故障单元规模 $G_{fail}$
-- 单实例 Prefill 吞吐 $TPS_{pre}^{inst}$
-- 单实例 Decode 吞吐 $TPS_{dec}^{inst}$
-- $N_{inst}^{mem}$ / $N_{inst}^{pre}$ / $N_{inst}^{dec}$
-
-### 14.3 资源规模结果
-
-- $N_{inst}^{biz}$
-- $G_{biz}$
-- $N_{inst}^{final}$
-- $G_{final}$
-- 若使用档位输入，建议同时输出保守 / 中性 / 乐观三档结果
-
-### 14.4 效果反推结果
-
-- $TPS_{pre}^{cluster}$
-- $TPS_{dec}^{cluster}$
-- $C^{sus}$
-- $V_{gen}$
-- $TTFT_{avg}^{est}$ / $TTFT_{p95}^{upper}$
-- $E2E_{avg}^{est}$ / $E2E_{p95}^{upper}$
-- $Q_{dec}^{day}$
-- $Q_{pre}^{day}$
-
-### 14.5 结果展示单位建议
-
-为避免中间推导混入单位换算，建议仅在展示层做如下换算：
-
-- $byte\rightarrow GiB$
+基于业务所需实例数 $N_{inst}^{biz}$，集群 Decode 总吞吐为
 
 $$
-X_{GiB}=\frac{X_{byte}}{2^{30}}
+TPS_{dec}^{cluster}=N_{inst}^{biz}TPS_{dec}^{inst}；
 $$
 
-- $byte/s\rightarrow GiB/s$
+集群 Prefill 总吞吐为
 
 $$
-X_{GiB/s}=\frac{X_{byte/s}}{2^{30}}
+TPS_{pre}^{cluster}=N_{inst}^{biz}TPS_{pre}^{inst}(S_{in,p95})。
 $$
 
-- $FLOP/s\rightarrow TFLOP/s$
+### 8.2 可持续并发能力
+
+若要反推在当前资源规模下可持续支持的总活跃并发，可以沿用与前文一致的阶段活跃比例口径。
+
+先看 Decode 侧。能被当前集群持续支撑的 Decode 活跃请求数约为
 
 $$
-X_{TFLOPS}=\frac{X_{FLOP/s}}{10^{12}}
+C_{dec}^{sus}=\frac{TPS_{dec}^{cluster}}{R_{dec,req}^{p95}}。
 $$
 
-显存与带宽展示默认采用二进制单位 $GiB$ / $GiB/s$；核心公式内部仍统一使用 $byte$ 与 $byte/s$，不在中间过程混入任何展示单位换算。
+把它换算成总活跃并发，得到
+
+$$
+C_{total,dec}^{sus}=\frac{C_{dec}^{sus}}{r_{dec,peak}}。
+$$
+
+同理，Prefill 侧可持续支撑的 Prefill 活跃请求数约为
+
+$$
+C_{pre}^{sus}=\frac{TPS_{pre}^{cluster}}{R_{pre,req}^{p95}}，
+$$
+
+换算成总活跃并发为
+
+$$
+C_{total,pre}^{sus}=\frac{C_{pre}^{sus}}{r_{pre,peak}}。
+$$
+
+因此，当前规模下的可持续总活跃并发近似为
+
+$$
+C^{sus}=\min\left(C_{total,dec}^{sus},\,C_{total,pre}^{sus}\right)。
+$$
+
+### 8.3 单请求生成速度
+
+在峰值窗口内，若 Decode 阶段平均有 $C_{peak}r_{dec,peak}$ 个请求同时活跃，则单请求平均生成速度近似为
+
+$$
+V_{gen}\approx\frac{TPS_{dec}^{cluster}}{C_{peak}r_{dec,peak}}。
+$$
+
+它的单位是输出 token/s。
+
+### 8.4 时延反推
+
+为了保证口径与前文一致，Prefill 时延反推继续使用同样的 Prefill 吞吐模型和同样的阶段活跃比例。
+
+在平均场景下，每个 Prefill 活跃请求平均可分到的 Prefill 吞吐约为
+
+$$
+\frac{TPS_{pre}^{cluster}}{C_{avg}r_{pre,peak}}。
+$$
+
+因此平均 TTFT 的近似值可写成
+
+$$
+TTFT_{avg}^{est}\approx\frac{S_{in,avg}}{TPS_{pre}^{cluster}/(C_{avg}r_{pre,peak})}。
+$$
+
+相应地，平均 E2E 近似为
+
+$$
+E2E_{avg}^{est}\approx \frac{S_{in,avg}}{TPS_{pre}^{cluster}/(C_{avg}r_{pre,peak})}+\frac{S_{out,avg}}{TPS_{dec}^{cluster}/(C_{avg}r_{dec,avg})}。
+$$
+
+在保守的 P95 口径下，P95 TTFT 上界近似为
+
+$$
+TTFT_{p95}^{upper}\approx\frac{S_{in,p95}}{TPS_{pre}^{cluster}/(C_{peak}r_{pre,peak})}，
+$$
+
+P95 E2E 上界近似为
+
+$$
+E2E_{p95}^{upper}\approx \frac{S_{in,p95}}{TPS_{pre}^{cluster}/(C_{peak}r_{pre,peak})}+\frac{S_{out,p95}}{TPS_{dec}^{cluster}/(C_{peak}r_{dec,peak})}。
+$$
+
+这一写法与第 4 章、第 6 章保持了一致：Prefill 始终按输入长度相关的吞吐模型处理，而不是在效果反推阶段突然换回常数倍率模型。
+
+### 8.5 每日产能
+
+若只关心 token 产能，也可以计算每日 token 处理量。集群每日 Decode 产能近似为
+
+$$
+Q_{dec}^{day}=TPS_{dec}^{cluster}\times 86400，
+$$
+
+集群每日 Prefill 产能近似为
+
+$$
+Q_{pre}^{day}=TPS_{pre}^{cluster}\times 86400。
+$$
+
+---
+
+## 9. 输出结果建议
+
+为了便于评审和决策，最终输出建议至少包括四类内容。
+
+### 9.1 输入摘要
+
+概括业务目标、长度画像、模型关键信息、GPU 规格、效率系数和高可用假设，确保评审者能快速判断“输入是否合理”。
+
+### 9.2 部署求解结果
+
+明确给出：
+
+- 单实例 GPU 数 $g$；
+- 是否为单卡完整装载或多卡分片装载；
+- 当前方案的显存可行性说明；
+- 单实例的 Prefill 与 Decode 吞吐能力。
+
+### 9.3 资源规模结果
+
+明确给出：
+
+- Decode 约束实例数；
+- Prefill 约束实例数；
+- 显存约束实例数；
+- 业务最小实例数 $N_{inst}^{biz}$；
+- 业务最小 GPU 数 $G_{biz}$；
+- 高可用后的最终 GPU 数 $G_{final}$。
+
+### 9.4 效果反推结果
+
+明确给出：
+
+- 集群总 Prefill / Decode 吞吐；
+- 可持续并发能力；
+- 单请求平均生成速度；
+- 平均时延近似和保守 P95 时延近似；
+- 每日产能。
+
+### 9.5 结果使用建议
+
+本文方法适合用于采购前 sizing、方案比较和容量规划。若测算结果将直接用于生产承诺，建议在本文基础上继续补充：
+
+- 框架实测的单实例吞吐；
+- 真实到达率与 burst 模型；
+- 多卡通信拓扑与并行方式；
+- 线上压测或小规模试运行结果。
+
+这样可以把本文中的少量经验系数逐步替换为实测量，使结论进一步收敛。
