@@ -303,15 +303,97 @@ $$
 M_{cache} = C_{peak}^{budget} \cdot M_{cache}^{req}(S_{p95})
 $$
 
-若采用标准 Transformer attention，可将单请求 KV cache 近似写为：
+为统一不同 attention 结构，可先定义“**每层每 token 的 cache 字节数**”：
 
 $$
-M_{cache}^{req}(S) \approx 2 \cdot L \cdot H_{kv} \cdot d_{head} \cdot S \cdot b_{kv}
+b_{cache}^{layer,token}
 $$
 
-或使用你在具体模型上更准确的 cache 显存公式替代。
+则单请求在长度 $S$ 下的 cache 显存统一写为：
 
-对于 MLA、GQA、MQA 或其他 attention 变体，应根据实际 cache 结构替换该式。
+$$
+M_{cache}^{req}(S) = L \cdot S \cdot b_{cache}^{layer,token}
+$$
+
+其中：
+
+- $L$ 为层数；
+- $S$ 为该请求当前已占用 cache 的总长度；
+- $b_{kv}$ 为 KV cache 精度对应的单元素字节数，例如 FP16/BF16 常取 2 bytes，FP8 常取 1 byte；
+- $H_{kv}$ 为 KV 头数；
+- $d_{head}$ 为每个头的维度；
+- $d_{latent}$ 为 MLA latent cache 维度；
+- $b_{aux}$ 为除 latent 向量外，每层每 token 额外常驻的辅助字节数。
+
+对不同 attention 结构，$b_{cache}^{layer,token}$ 可按下式选取。
+
+**MHA**
+
+标准多头注意力下，每层每 token 需要同时保存 K 与 V，因此：
+
+$$
+b_{cache}^{layer,token} = 2 \cdot H_{kv} \cdot d_{head} \cdot b_{kv}
+$$
+
+若采用标准 MHA，通常 $H_{kv} = H$，且 $H \cdot d_{head} = d_{model}$，于是也可写成：
+
+$$
+b_{cache}^{layer,token} = 2 \cdot d_{model} \cdot b_{kv}
+$$
+
+从而：
+
+$$
+M_{cache}^{req}(S) = 2 \cdot L \cdot H_{kv} \cdot d_{head} \cdot S \cdot b_{kv}
+$$
+
+**GQA**
+
+Grouped-Query Attention 下，cache 规模由 KV 头数而不是 query 头数决定，因此：
+
+$$
+b_{cache}^{layer,token} = 2 \cdot H_{kv} \cdot d_{head} \cdot b_{kv}
+$$
+
+从而：
+
+$$
+M_{cache}^{req}(S) = 2 \cdot L \cdot H_{kv} \cdot d_{head} \cdot S \cdot b_{kv}
+$$
+
+与 MHA 相比，GQA 的主要区别不是公式形式变化，而是 $H_{kv}$ 通常显著小于 query 头数，因此单请求 cache 显存更小。
+
+**MQA**
+
+Multi-Query Attention 可视为 $H_{kv} = 1$ 的特例，因此：
+
+$$
+b_{cache}^{layer,token} = 2 \cdot d_{head} \cdot b_{kv}
+$$
+
+从而：
+
+$$
+M_{cache}^{req}(S) = 2 \cdot L \cdot d_{head} \cdot S \cdot b_{kv}
+$$
+
+**MLA**
+
+对 MLA，当前实现不再按显式 K/V 双张量建模，而是按每层每 token 的 latent cache 与辅助状态之和估算：
+
+$$
+b_{cache}^{layer,token} = d_{latent} \cdot b_{kv} + b_{aux}
+$$
+
+从而：
+
+$$
+M_{cache}^{req}(S) = L \cdot S \cdot (d_{latent} \cdot b_{kv} + b_{aux})
+$$
+
+例如，若某 MLA 模型取 $d_{latent} = 512$、$b_{kv} = 1$ byte、$b_{aux} = 128$ bytes，则每层每 token 的 cache 字节数为 $512 \times 1 + 128 = 640$ bytes。
+
+若模型采用 Sparse/Hybrid attention，或你手头已有更准确的 profile 数据，则应直接提供更贴近实际的 $b_{cache}^{layer,token}$ 或 $M_{cache}^{req}(S)$，而不是机械套用上述近似式。
 
 ### 5.5 显存卡数下界
 
