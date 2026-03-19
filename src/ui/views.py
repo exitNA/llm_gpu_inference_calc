@@ -51,7 +51,7 @@ def build_traffic_profile_header_html() -> str:
     <div class="selection-card">
       <p class="selection-eyebrow">business inputs</p>
       <p class="selection-copy">
-        按文档主口径输入平均/峰值 QPS、平均/P95 长度，以及 TTFT/E2E 时延目标。
+        按 sizing 主口径输入峰值 QPS、P95 输入输出长度，以及 P95 TTFT/E2E 目标。
       </p>
     </div>
     """
@@ -68,10 +68,10 @@ def build_calculation_process_html(result: dict[str, Any]) -> str:
     <div class="calc-process-shell">
       <div class="calc-process-hero">
         <div>
-          <p class="calc-process-eyebrow">Validation View</p>
-          <h2>计算过程校验面板</h2>
+          <p class="calc-process-eyebrow">Calculation Detail View</p>
+          <h2>计算细节总览</h2>
         </div>
-        <p class="calc-process-copy">按文档公式顺序展示关键计算链路，便于人工复核。</p>
+        <p class="calc-process-copy">每一步先看结论，再看公式与代入过程，便于人工快速复核。</p>
       </div>
       <div class="calc-process-grid">
         {''.join(cards)}
@@ -131,15 +131,15 @@ def build_overview_html(result: dict[str, Any]) -> str:
           <div class="result-item-row">
             <span class="result-item-label">QPS</span>
             <div class="result-item-content">
-              <span class="result-item-value">{traffic.lambda_avg_qps:.2f} / {traffic.lambda_peak_qps:.2f}</span>
-              <span class="result-item-sub">平均 / 峰值 req/s</span>
+              <span class="result-item-value">{traffic.lambda_peak_qps:.2f}</span>
+              <span class="result-item-sub">峰值 req/s</span>
             </div>
           </div>
           <div class="result-item-row">
             <span class="result-item-label">长度</span>
             <div class="result-item-content">
-              <span class="result-item-value">{traffic.avg_total_tokens} / {traffic.p95_total_tokens}</span>
-              <span class="result-item-sub">平均 / P95 总长度 tokens</span>
+              <span class="result-item-value">{traffic.p95_total_tokens}</span>
+              <span class="result-item-sub">P95 总长度 tokens</span>
             </div>
           </div>
         </div>
@@ -316,7 +316,6 @@ def build_final_summary_html(result: dict[str, Any]) -> str:
       <div class="ha-detail-grid">
         <div class="ha-detail-card"><span class="ha-detail-label">主导约束</span><span class="ha-detail-value">{escape(dominant)}</span><span class="ha-detail-meta">业务基线由谁决定</span></div>
         <div class="ha-detail-card"><span class="ha-detail-label">保守可持续 QPS</span><span class="ha-detail-value">{fmt_value(result['sustainable_qps_p95'], 2)} req/s</span><span class="ha-detail-meta">P95 长度口径</span></div>
-        <div class="ha-detail-card"><span class="ha-detail-label">常态可持续 QPS</span><span class="ha-detail-value">{fmt_value(result['sustainable_qps_avg'], 2)} req/s</span><span class="ha-detail-meta">平均长度口径</span></div>
         <div class="ha-detail-card"><span class="ha-detail-label">最大在途请求量</span><span class="ha-detail-value">{result['max_concurrency_by_memory_p95']}</span><span class="ha-detail-meta">显存口径 P95</span></div>
         <div class="ha-detail-card"><span class="ha-detail-label">每日 Decode token</span><span class="ha-detail-value">{fmt_compact(result['daily_decode_token_capacity_p95'])}</span><span class="ha-detail-meta">保守口径</span></div>
         <div class="ha-detail-card"><span class="ha-detail-label">每日 Prefill token</span><span class="ha-detail-value">{fmt_compact(result['daily_prefill_token_capacity_p95'])}</span><span class="ha-detail-meta">保守口径</span></div>

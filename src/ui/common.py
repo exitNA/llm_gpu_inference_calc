@@ -37,33 +37,25 @@ def render_calc_section_steps(section: dict[str, Any]) -> str:
         if step.get("note"):
             note_html = f'<div class="calc-step-note">{escape(step["note"])}</div>'
         human_formula = step.get("formula_note") or step["formula"]
-        compact_formula = human_formula.split("=", 1)[1].strip() if "=" in human_formula else human_formula
+        full_formula = human_formula if "=" in human_formula else f'{step["label"]} = {human_formula}'
         step_cards.append(
             f"""
             <div class="calc-step-card">
-              <div class="calc-step-layout">
-                <div class="calc-step-main">
-                  <div class="calc-step-head">
-                    <div class="calc-step-metric-wrap">
-                      <span class="calc-step-index">{idx:02d}</span>
-                      <div class="calc-step-metric">{escape(step["label"])}</div>
-                    </div>
-                  </div>
-                  <div class="calc-step-formula-line">
-                    <span class="calc-step-k">公式</span>
-                    <div class="calc-step-formula-wrap">
-                      <div class="calc-step-human-formula">{escape(compact_formula)}</div>
-                    </div>
-                  </div>
-                  <div class="calc-step-detail-line">
-                    <span class="calc-step-k">代入</span>
-                    <code class="calc-step-v">{escape(step["substitution"])}</code>
-                  </div>
-                  {note_html}
+              <div class="calc-step-topline">
+                <span class="calc-step-index">{idx:02d}</span>
+                <div class="calc-step-highlight">
+                  <span class="calc-step-highlight-label">{escape(step["label"])}</span>
+                  <span class="calc-step-highlight-equals">=</span>
+                  <span class="calc-step-highlight-result">{escape(step["result"])}</span>
                 </div>
-                <div class="calc-step-side">
-                  <div class="calc-step-result-inline">{escape(step["result"])}</div>
+              </div>
+              <div class="calc-step-main">
+                <div class="calc-step-derivation">
+                  <span class="calc-step-derivation-formula">{escape(full_formula)}</span>
+                  <span class="calc-step-derivation-arrow">→</span>
+                  <code class="calc-step-derivation-sub">{escape(step["substitution"])}</code>
                 </div>
+                {note_html}
               </div>
             </div>
             """

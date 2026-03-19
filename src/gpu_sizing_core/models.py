@@ -35,32 +35,19 @@ class RuntimeConfig:
 
 @dataclass
 class TrafficConfig:
-    lambda_avg_qps: float
     lambda_peak_qps: float
-    avg_input_tokens: int
-    avg_output_tokens: int
     p95_input_tokens: int
     p95_output_tokens: int
-    ttft_avg_target_sec: float
     ttft_p95_target_sec: float
-    e2e_avg_target_sec: float
     e2e_p95_target_sec: float
     p95_total_tokens_override: int | None = None
     concurrency_safety_factor: float = 1.0
-
-    @property
-    def avg_total_tokens(self) -> int:
-        return self.avg_input_tokens + self.avg_output_tokens
 
     @property
     def p95_total_tokens(self) -> int:
         if self.p95_total_tokens_override is not None:
             return self.p95_total_tokens_override
         return self.p95_input_tokens + self.p95_output_tokens
-
-    @property
-    def decode_avg_budget_sec(self) -> float:
-        return self.e2e_avg_target_sec - self.ttft_avg_target_sec
 
     @property
     def decode_p95_budget_sec(self) -> float:

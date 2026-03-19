@@ -80,26 +80,18 @@ def estimate_attention_compute_coefficient(model: ModelConfig, runtime: RuntimeC
 
 def estimate_request_stats(traffic: TrafficConfig) -> dict[str, float]:
     return {
-        "avg_input_tokens": float(traffic.avg_input_tokens),
-        "avg_output_tokens": float(traffic.avg_output_tokens),
-        "avg_total_tokens": float(traffic.avg_total_tokens),
         "p95_input_tokens": float(traffic.p95_input_tokens),
         "p95_output_tokens": float(traffic.p95_output_tokens),
         "p95_total_tokens": float(traffic.p95_total_tokens),
-        "decode_avg_budget_sec": traffic.decode_avg_budget_sec,
         "decode_p95_budget_sec": traffic.decode_p95_budget_sec,
     }
 
 
 def estimate_workload_targets(traffic: TrafficConfig) -> dict[str, float]:
-    c_avg_budget = traffic.lambda_avg_qps * traffic.e2e_avg_target_sec
     c_peak_budget = traffic.lambda_peak_qps * traffic.e2e_p95_target_sec * traffic.concurrency_safety_factor
     return {
-        "tps_pre_target_avg": traffic.lambda_avg_qps * traffic.avg_input_tokens,
-        "tps_dec_target_avg": traffic.lambda_avg_qps * traffic.avg_output_tokens,
         "tps_pre_target_peak": traffic.lambda_peak_qps * traffic.p95_input_tokens,
         "tps_dec_target_peak": traffic.lambda_peak_qps * traffic.p95_output_tokens,
-        "c_avg_budget": c_avg_budget,
         "c_peak_budget": c_peak_budget,
     }
 
@@ -124,12 +116,10 @@ def estimate_cache_memory(
     c_peak_budget: float,
 ) -> dict[str, float]:
     cache_bytes_per_token_per_layer = estimate_cache_bytes_per_token_per_layer(model, runtime)
-    avg_cache_bytes_per_request = model.num_layers * traffic.avg_total_tokens * cache_bytes_per_token_per_layer
     p95_cache_bytes_per_request = model.num_layers * traffic.p95_total_tokens * cache_bytes_per_token_per_layer
     cache_total_peak_bytes = c_peak_budget * p95_cache_bytes_per_request
     return {
         "cache_bytes_per_token_per_layer": cache_bytes_per_token_per_layer,
-        "avg_cache_bytes_per_request": avg_cache_bytes_per_request,
         "p95_cache_bytes_per_request": p95_cache_bytes_per_request,
         "cache_total_peak_bytes": cache_total_peak_bytes,
     }
@@ -230,7 +220,6 @@ def estimate_throughput_based_gpu_count(
     runtime: RuntimeConfig,
 ) -> dict[str, float | int | None]:
     workload_info = estimate_workload_targets(traffic)
-    prefill_avg = estimate_prefill_tps_per_gpu(model, gpu, runtime, traffic.avg_input_tokens)
     prefill_p95 = estimate_prefill_tps_per_gpu(model, gpu, runtime, traffic.p95_input_tokens)
     decode = estimate_decode_tps_per_gpu(model, gpu, runtime)
 
@@ -244,9 +233,6 @@ def estimate_throughput_based_gpu_count(
 
     return {
         **workload_info,
-        "prefill_tps_avg_bw_limited": prefill_avg["prefill_tps_bw_limited"],
-        "prefill_tps_avg_compute_limited": prefill_avg["prefill_tps_compute_limited"],
-        "prefill_tps_avg_card": prefill_avg["prefill_tps_card"],
         "prefill_tps_p95_bw_limited": prefill_p95["prefill_tps_bw_limited"],
         "prefill_tps_p95_compute_limited": prefill_p95["prefill_tps_compute_limited"],
         "prefill_tps_p95_card": prefill_p95["prefill_tps_card"],
@@ -288,30 +274,20 @@ def estimate_capacity_backprojection(
     business_gpu_count: int,
 ) -> dict[str, float | int | None | str]:
     prefill_cap_p95 = multiply_optional(throughput_info["prefill_tps_p95_card"], business_gpu_count)
-    prefill_cap_avg = multiply_optional(throughput_info["prefill_tps_avg_card"], business_gpu_count)
     decode_cap = multiply_optional(throughput_info["decode_tps_card"], business_gpu_count)
 
     lambda_pre_p95 = divide_optional(prefill_cap_p95 or 0.0, traffic.p95_input_tokens)
     lambda_dec_p95 = divide_optional(decode_cap or 0.0, traffic.p95_output_tokens)
     lambda_p95 = min(lambda_pre_p95, lambda_dec_p95) if lambda_pre_p95 is not None and lambda_dec_p95 is not None else None
 
-    lambda_pre_avg = divide_optional(prefill_cap_avg or 0.0, traffic.avg_input_tokens)
-    lambda_dec_avg = divide_optional(decode_cap or 0.0, traffic.avg_output_tokens) if traffic.avg_output_tokens > 0 else None
-    lambda_avg = min(lambda_pre_avg, lambda_dec_avg) if lambda_pre_avg is not None and lambda_dec_avg is not None else None
-
     daily_prefill_tokens_p95 = multiply_optional(prefill_cap_p95, SECONDS_PER_DAY)
     daily_decode_tokens_p95 = multiply_optional(decode_cap, SECONDS_PER_DAY)
-    daily_prefill_tokens_avg = multiply_optional(prefill_cap_avg, SECONDS_PER_DAY)
-    daily_decode_tokens_avg = multiply_optional(decode_cap, SECONDS_PER_DAY)
     daily_requests_p95 = multiply_optional(lambda_p95, SECONDS_PER_DAY)
-    daily_requests_avg = multiply_optional(lambda_avg, SECONDS_PER_DAY)
 
     cluster_effective_vram_bytes = business_gpu_count * float(memory_info["usable_vram_bytes_per_gpu"])
     cache_avail_bytes = cluster_effective_vram_bytes - float(memory_info["weight_bytes"]) - float(memory_info["runtime_fixed_bytes"])
     p95_cache_per_request = float(memory_info["p95_cache_bytes_per_request"])
-    avg_cache_per_request = float(memory_info["avg_cache_bytes_per_request"])
     c_max_p95 = max(floor_div(cache_avail_bytes, p95_cache_per_request), 0) if p95_cache_per_request > 0 else None
-    c_max_avg = max(floor_div(cache_avail_bytes, avg_cache_per_request), 0) if avg_cache_per_request > 0 else None
 
     rho_conc_p95 = None
     c_peak_budget = float(throughput_info["c_peak_budget"])
@@ -331,24 +307,16 @@ def estimate_capacity_backprojection(
 
     return {
         "cluster_prefill_tps_capacity_p95": prefill_cap_p95,
-        "cluster_prefill_tps_capacity_avg": prefill_cap_avg,
         "cluster_decode_tps_capacity": decode_cap,
         "sustainable_qps_p95": lambda_p95,
-        "sustainable_qps_avg": lambda_avg,
         "sustainable_prefill_qps_p95": lambda_pre_p95,
         "sustainable_decode_qps_p95": lambda_dec_p95,
-        "sustainable_prefill_qps_avg": lambda_pre_avg,
-        "sustainable_decode_qps_avg": lambda_dec_avg,
         "daily_prefill_token_capacity_p95": daily_prefill_tokens_p95,
         "daily_decode_token_capacity_p95": daily_decode_tokens_p95,
-        "daily_prefill_token_capacity_avg": daily_prefill_tokens_avg,
-        "daily_decode_token_capacity_avg": daily_decode_tokens_avg,
         "daily_request_capacity_p95": daily_requests_p95,
-        "daily_request_capacity_avg": daily_requests_avg,
         "cluster_effective_vram_bytes": cluster_effective_vram_bytes,
         "cache_available_bytes": cache_avail_bytes,
         "max_concurrency_by_memory_p95": c_max_p95,
-        "max_concurrency_by_memory_avg": c_max_avg,
         "concurrency_margin_ratio_p95": rho_conc_p95,
         "latency_risk_level": latency_risk,
         "latency_risk_note": latency_note,

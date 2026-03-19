@@ -18,15 +18,10 @@ def default_component_values() -> tuple[Any, ...]:
         get_default_model_key(),
         "bf16",
         get_default_gpu_key(),
-        profile.lambda_avg_qps,
         profile.lambda_peak_qps,
-        profile.avg_input_tokens,
-        profile.avg_output_tokens,
         profile.p95_input_tokens,
         profile.p95_output_tokens,
-        profile.ttft_avg_sec,
         profile.ttft_p95_sec,
-        profile.e2e_avg_sec,
         profile.e2e_p95_sec,
         int(profile.concurrency_safety_factor * 100),
         15,
@@ -66,15 +61,10 @@ def build_configs(
     model_dropdown: Any,
     precision_override: Any,
     gpu_preset_key: Any,
-    lambda_avg_qps: Any,
     lambda_peak_qps: Any,
-    avg_input_tokens: Any,
-    avg_output_tokens: Any,
     p95_input_tokens: Any,
     p95_output_tokens: Any,
-    ttft_avg_sec: Any,
     ttft_p95_sec: Any,
-    e2e_avg_sec: Any,
     e2e_p95_sec: Any,
     concurrency_safety_factor_pct: Any,
     weight_overhead_ratio: Any,
@@ -83,29 +73,19 @@ def build_configs(
     bandwidth_efficiency: Any,
     compute_efficiency: Any,
 ) -> tuple[ModelConfig, TrafficConfig, GPUConfig, RuntimeConfig]:
-    lambda_avg_qps_value = to_float(lambda_avg_qps, "平均 QPS")
     lambda_peak_qps_value = to_float(lambda_peak_qps, "峰值 QPS")
-    avg_input_tokens_value = to_int(avg_input_tokens, "平均输入长度")
-    avg_output_tokens_value = to_int(avg_output_tokens, "平均输出长度")
     p95_input_tokens_value = to_int(p95_input_tokens, "P95 输入长度")
     p95_output_tokens_value = to_int(p95_output_tokens, "P95 输出长度")
-    ttft_avg_sec_value = to_float(ttft_avg_sec, "平均 TTFT")
     ttft_p95_sec_value = to_float(ttft_p95_sec, "P95 TTFT")
-    e2e_avg_sec_value = to_float(e2e_avg_sec, "平均 E2E")
     e2e_p95_sec_value = to_float(e2e_p95_sec, "P95 E2E")
     concurrency_safety_factor_value = (
         to_float(concurrency_safety_factor_pct, "峰值在途安全系数") / 100.0
     )
 
-    ensure_positive(lambda_avg_qps_value, "平均 QPS")
     ensure_positive(lambda_peak_qps_value, "峰值 QPS")
-    ensure_positive(avg_input_tokens_value, "平均输入长度")
-    ensure_non_negative(avg_output_tokens_value, "平均输出长度")
     ensure_positive(p95_input_tokens_value, "P95 输入长度")
     ensure_non_negative(p95_output_tokens_value, "P95 输出长度")
-    ensure_positive(ttft_avg_sec_value, "平均 TTFT")
     ensure_positive(ttft_p95_sec_value, "P95 TTFT")
-    ensure_positive(e2e_avg_sec_value, "平均 E2E")
     ensure_positive(e2e_p95_sec_value, "P95 E2E")
     ensure_positive(concurrency_safety_factor_value, "峰值在途安全系数")
 
@@ -131,15 +111,10 @@ def build_configs(
     target_kv = "fp8" if target_prec == "fp8" else "fp16"
 
     traffic = TrafficConfig(
-        lambda_avg_qps=lambda_avg_qps_value,
         lambda_peak_qps=lambda_peak_qps_value,
-        avg_input_tokens=avg_input_tokens_value,
-        avg_output_tokens=avg_output_tokens_value,
         p95_input_tokens=p95_input_tokens_value,
         p95_output_tokens=p95_output_tokens_value,
-        ttft_avg_target_sec=ttft_avg_sec_value,
         ttft_p95_target_sec=ttft_p95_sec_value,
-        e2e_avg_target_sec=e2e_avg_sec_value,
         e2e_p95_target_sec=e2e_p95_sec_value,
         concurrency_safety_factor=concurrency_safety_factor_value,
     )

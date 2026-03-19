@@ -73,16 +73,7 @@ def evaluate_single_model(
         **capacity_info,
         "weight_with_overhead_gb": round(bytes_to_gb(float(memory_info["weight_bytes"])), 2),
         "runtime_overhead_gb": round(bytes_to_gb(float(memory_info["runtime_fixed_bytes"])), 2),
-        "avg_kv_gb_per_request": round(bytes_to_gb(float(memory_info["avg_cache_bytes_per_request"])), 2),
         "p95_kv_gb_per_request": round(bytes_to_gb(float(memory_info["p95_cache_bytes_per_request"])), 2),
-        "avg_total_memory_gb": round(
-            bytes_to_gb(
-                float(memory_info["weight_bytes"])
-                + float(memory_info["runtime_fixed_bytes"])
-                + float(throughput_info["c_avg_budget"]) * float(memory_info["avg_cache_bytes_per_request"])
-            ),
-            2,
-        ),
         "p95_total_memory_gb": round(bytes_to_gb(float(memory_info["total_memory_bytes"])), 2),
         "usable_vram_gb_per_gpu": round(bytes_to_gb(float(memory_info["usable_vram_bytes_per_gpu"])), 2),
         "memory_for_sizing_gb": round(bytes_to_gb(float(memory_info["total_memory_bytes"])), 2),
@@ -102,16 +93,7 @@ def evaluate_single_model(
 
     result["request_profile_rows"] = [
         {
-            "name": "平均口径",
-            "qps": traffic.lambda_avg_qps,
-            "input_tokens": traffic.avg_input_tokens,
-            "output_tokens": traffic.avg_output_tokens,
-            "total_tokens": traffic.avg_total_tokens,
-            "ttft_target_sec": traffic.ttft_avg_target_sec,
-            "e2e_target_sec": traffic.e2e_avg_target_sec,
-        },
-        {
-            "name": "P95/峰值口径",
+            "name": "峰值/P95口径",
             "qps": traffic.lambda_peak_qps,
             "input_tokens": traffic.p95_input_tokens,
             "output_tokens": traffic.p95_output_tokens,
@@ -121,12 +103,6 @@ def evaluate_single_model(
         },
     ]
     result["kv_profile_rows"] = [
-        {
-            "name": "平均长度",
-            "seq_len_total": traffic.avg_total_tokens,
-            "kv_cache_gb_per_request": result["avg_kv_gb_per_request"],
-            "max_concurrency_by_memory": capacity_info["max_concurrency_by_memory_avg"],
-        },
         {
             "name": "P95长度",
             "seq_len_total": traffic.p95_total_tokens,
@@ -161,7 +137,6 @@ def format_result_text(result: dict[str, Any]) -> str:
         "",
         "[能力回推]",
         f"- 保守可持续 QPS: {format_calc_number(result['sustainable_qps_p95'])} req/s",
-        f"- 常态可持续 QPS: {format_calc_number(result['sustainable_qps_avg'])} req/s",
         f"- 保守每日 Prefill token: {format_adaptive_token_volume(result['daily_prefill_token_capacity_p95'])}",
         f"- 保守每日 Decode token: {format_adaptive_token_volume(result['daily_decode_token_capacity_p95'])}",
         f"- 显存最大在途请求量(P95): {result['max_concurrency_by_memory_p95']}",

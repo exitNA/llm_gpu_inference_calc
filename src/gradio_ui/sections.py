@@ -22,15 +22,10 @@ class SidebarComponents:
     model_dropdown: Any
     precision_dropdown: Any
     gpu_preset_key: Any
-    lambda_avg_qps: Any
     lambda_peak_qps: Any
-    avg_input_tokens: Any
-    avg_output_tokens: Any
     p95_input_tokens: Any
     p95_output_tokens: Any
-    ttft_avg_sec: Any
     ttft_p95_sec: Any
-    e2e_avg_sec: Any
     e2e_p95_sec: Any
     concurrency_safety_factor_pct: Any
     weight_overhead_ratio: Any
@@ -45,15 +40,10 @@ class SidebarComponents:
             self.model_dropdown,
             self.precision_dropdown,
             self.gpu_preset_key,
-            self.lambda_avg_qps,
             self.lambda_peak_qps,
-            self.avg_input_tokens,
-            self.avg_output_tokens,
             self.p95_input_tokens,
             self.p95_output_tokens,
-            self.ttft_avg_sec,
             self.ttft_p95_sec,
-            self.e2e_avg_sec,
             self.e2e_p95_sec,
             self.concurrency_safety_factor_pct,
             self.weight_overhead_ratio,
@@ -99,14 +89,14 @@ def build_sidebar(gr, defaults: tuple[Any, ...]) -> SidebarComponents:
                     maximum=100,
                     step=1,
                     label="权重附加系数 α_w (%)",
-                    value=defaults[14],
+                    value=defaults[9],
                 )
                 runtime_overhead_ratio = gr.Slider(
                     minimum=0,
                     maximum=100,
                     step=1,
                     label="运行时固定显存系数 α_r (%)",
-                    value=defaults[15],
+                    value=defaults[10],
                 )
 
             with gr.Group(elem_classes=["config-section", "config-section-gpu"]):
@@ -123,45 +113,38 @@ def build_sidebar(gr, defaults: tuple[Any, ...]) -> SidebarComponents:
                     maximum=100,
                     step=1,
                     label="可用显存比例 η_vram (%)",
-                    value=defaults[16],
+                    value=defaults[11],
                 )
                 bandwidth_efficiency = gr.Slider(
                     minimum=10,
                     maximum=100,
                     step=1,
                     label="带宽利用率 η_bw (%)",
-                    value=defaults[17],
+                    value=defaults[12],
                 )
                 compute_efficiency = gr.Slider(
                     minimum=10,
                     maximum=100,
                     step=1,
                     label="算力利用率 η_cmp (%)",
-                    value=defaults[18],
+                    value=defaults[13],
                 )
 
             with gr.Group(elem_classes=["config-section", "config-section-traffic"]):
-                gr.HTML(build_config_section_header_html("🚦", "业务目标", "QPS、长度画像与时延目标"))
+                gr.HTML(build_config_section_header_html("🚦", "业务目标", "峰值 QPS、P95 长度与 P95 时延目标"))
                 with gr.Row(elem_classes=["config-field-grid"]):
-                    lambda_avg_qps = gr.Number(label="平均 QPS", value=defaults[3], precision=2)
-                    lambda_peak_qps = gr.Number(label="峰值 QPS", value=defaults[4], precision=2)
+                    lambda_peak_qps = gr.Number(label="峰值 QPS", value=defaults[3], precision=2)
                     concurrency_safety_factor_pct = gr.Number(
                         label="在途安全系数 (%)",
-                        value=defaults[13],
+                        value=defaults[8],
                         precision=0,
                     )
                 with gr.Row(elem_classes=["config-field-grid"]):
-                    avg_input_tokens = gr.Number(label="平均输入", value=defaults[5], precision=0)
-                    avg_output_tokens = gr.Number(label="平均输出", value=defaults[6], precision=0)
+                    p95_input_tokens = gr.Number(label="P95 输入", value=defaults[4], precision=0)
+                    p95_output_tokens = gr.Number(label="P95 输出", value=defaults[5], precision=0)
                 with gr.Row(elem_classes=["config-field-grid"]):
-                    p95_input_tokens = gr.Number(label="P95 输入", value=defaults[7], precision=0)
-                    p95_output_tokens = gr.Number(label="P95 输出", value=defaults[8], precision=0)
-                with gr.Row(elem_classes=["config-field-grid"]):
-                    ttft_avg_sec = gr.Number(label="平均 TTFT (s)", value=defaults[9], precision=2)
-                    ttft_p95_sec = gr.Number(label="P95 TTFT (s)", value=defaults[10], precision=2)
-                with gr.Row(elem_classes=["config-field-grid"]):
-                    e2e_avg_sec = gr.Number(label="平均 E2E (s)", value=defaults[11], precision=2)
-                    e2e_p95_sec = gr.Number(label="P95 E2E (s)", value=defaults[12], precision=2)
+                    ttft_p95_sec = gr.Number(label="P95 TTFT (s)", value=defaults[6], precision=2)
+                    e2e_p95_sec = gr.Number(label="P95 E2E (s)", value=defaults[7], precision=2)
 
             with gr.Row(elem_classes=["button-row"]):
                 reset_button = gr.Button("恢复默认", variant="secondary")
@@ -170,15 +153,10 @@ def build_sidebar(gr, defaults: tuple[Any, ...]) -> SidebarComponents:
         model_dropdown=model_dropdown,
         precision_dropdown=precision_dropdown,
         gpu_preset_key=gpu_preset_key,
-        lambda_avg_qps=lambda_avg_qps,
         lambda_peak_qps=lambda_peak_qps,
-        avg_input_tokens=avg_input_tokens,
-        avg_output_tokens=avg_output_tokens,
         p95_input_tokens=p95_input_tokens,
         p95_output_tokens=p95_output_tokens,
-        ttft_avg_sec=ttft_avg_sec,
         ttft_p95_sec=ttft_p95_sec,
-        e2e_avg_sec=e2e_avg_sec,
         e2e_p95_sec=e2e_p95_sec,
         concurrency_safety_factor_pct=concurrency_safety_factor_pct,
         weight_overhead_ratio=weight_overhead_ratio,
