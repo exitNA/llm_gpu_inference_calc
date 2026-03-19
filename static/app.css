@@ -779,8 +779,8 @@
 
 .memory-causality-shell {
   display: grid;
-  grid-template-columns: minmax(220px, 0.72fr) minmax(0, 1.68fr);
-  gap: 14px;
+  grid-template-columns: minmax(208px, 0.62fr) minmax(0, 1.78fr);
+  gap: 12px;
   align-items: start;
   margin-bottom: 12px;
 }
@@ -915,12 +915,12 @@
   display: flex;
   flex-direction: column;
   justify-content: flex-start;
-  gap: 8px;
-  padding: 16px 16px 14px;
-  border-radius: 20px;
+  gap: 7px;
+  padding: 14px 14px 12px;
+  border-radius: 18px;
   border: 1px solid #bfdbfe;
   background: linear-gradient(160deg, #ffffff 0%, #eaf3ff 100%);
-  box-shadow: 0 8px 22px rgba(59, 130, 246, 0.1);
+  box-shadow: 0 7px 18px rgba(59, 130, 246, 0.1);
 }
 
 .memory-result-kicker {
@@ -938,7 +938,7 @@
 }
 
 .memory-result-value {
-  font-size: 56px;
+  font-size: 52px;
   font-weight: 900;
   line-height: 0.9;
   letter-spacing: -0.06em;
@@ -955,7 +955,7 @@
 }
 
 .memory-result-caption {
-  font-size: 13px;
+  font-size: 12px;
   font-weight: 700;
   color: var(--c-text-primary);
 }
@@ -963,22 +963,54 @@
 .memory-result-proof {
   display: flex;
   flex-direction: column;
-  gap: 5px;
-  padding-top: 10px;
+  gap: 4px;
+  padding-top: 8px;
   border-top: 1px solid rgba(148, 163, 184, 0.3);
 }
 
 .memory-result-formula {
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 800;
   color: var(--c-text-primary);
   font-family: var(--font-mono);
 }
 
 .memory-result-note {
-  font-size: 12px;
-  line-height: 1.45;
+  font-size: 11px;
+  line-height: 1.4;
   color: var(--c-text-secondary);
+}
+
+.memory-result-stats {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+  padding-top: 2px;
+}
+
+.memory-result-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 9px;
+  border-radius: 10px;
+  border: 1px solid rgba(191, 219, 254, 0.9);
+  background: rgba(255, 255, 255, 0.72);
+}
+
+.memory-result-stat-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--c-text-tertiary);
+  letter-spacing: 0.03em;
+}
+
+.memory-result-stat-value {
+  font-size: 13px;
+  font-weight: 800;
+  color: var(--c-text-primary);
+  font-family: var(--font-mono);
+  line-height: 1.35;
 }
 
 .memory-support-grid {

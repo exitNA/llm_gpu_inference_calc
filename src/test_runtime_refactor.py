@@ -18,7 +18,7 @@ try:
     assert isinstance(gpu, GPUConfig)
     assert isinstance(runtime, RuntimeConfig)
     assert defaults.qps_estimation_mode == "poisson_from_daily_requests"
-    assert defaults.daily_request_count == 100000
+    assert defaults.daily_request_count == 50000
     assert defaults.poisson_time_window_sec == 10
 
     result = build_default_result()

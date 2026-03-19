@@ -215,15 +215,31 @@ def build_memory_analysis_html(result: dict[str, Any]) -> str:
     )
     calc_sections = result.get("calculation_process_sections", [])
     section_html = render_calc_accordion("显存约束计算细节", calc_sections[1] if len(calc_sections) > 1 else None)
-    previous_capacity_html = ""
+    result_stats_html = f"""
+          <div class="memory-result-stats">
+            <div class="memory-result-stat">
+              <span class="memory-result-stat-label">单卡有效显存</span>
+              <span class="memory-result-stat-value">{usable_vram_gib:.1f} GiB</span>
+            </div>
+            <div class="memory-result-stat">
+              <span class="memory-result-stat-label">当前余量</span>
+              <span class="memory-result-stat-value">{free_capacity_gib:.1f} GiB · {free_ratio:.0%}</span>
+            </div>
+    """
     if previous_gpu_count > 0:
-        previous_capacity_html = f"""
-        <div class="ha-detail-card memory-threshold-card">
-          <span class="ha-detail-label">{previous_gpu_count} 张卡仍不够</span>
-          <span class="ha-detail-value">{previous_capacity_gib:.1f} GiB</span>
-          <span class="ha-detail-meta">仍低于 {total_memory_gib:.1f} GiB，因此不够装下</span>
-        </div>
+        result_stats_html += f"""
+            <div class="memory-result-stat">
+              <span class="memory-result-stat-label">{previous_gpu_count} 张卡仍不够</span>
+              <span class="memory-result-stat-value">{previous_capacity_gib:.1f} GiB</span>
+            </div>
         """
+    result_stats_html += f"""
+            <div class="memory-result-stat">
+              <span class="memory-result-stat-label">并发余量系数</span>
+              <span class="memory-result-stat-value">{fmt_value(result['concurrency_margin_ratio_p95'], 2)}</span>
+            </div>
+          </div>
+    """
     return f"""
     <div class="step-section">
       <div class="step-header">
@@ -243,8 +259,9 @@ def build_memory_analysis_html(result: dict[str, Any]) -> str:
           <span class="memory-result-caption">显存口径下的最小卡数</span>
           <div class="memory-result-proof">
             <span class="memory-result-formula">{total_memory_gib:.1f} / {usable_vram_gib:.1f} = {required_gpu_ratio:.2f}</span>
-            <span class="memory-result-note">单卡有效显存 {usable_vram_gib:.1f} GiB，向上取整后得到 {gpu_count_by_memory} 张。</span>
+            <span class="memory-result-note">单卡 {usable_vram_gib:.1f} GiB，向上取整得 {gpu_count_by_memory} 张。</span>
           </div>
+          {result_stats_html}
         </div>
         <div class="memory-cause-cluster">
           <div class="memory-cause-heading">
@@ -277,24 +294,6 @@ def build_memory_analysis_html(result: dict[str, Any]) -> str:
               <span class="memory-rollup-value">{used_ratio:.0%}</span>
             </div>
           </div>
-        </div>
-      </div>
-      <div class="ha-detail-grid memory-support-grid">
-        <div class="ha-detail-card">
-          <span class="ha-detail-label">单卡有效显存</span>
-          <span class="ha-detail-value">{usable_vram_gib:.1f} GiB</span>
-          <span class="ha-detail-meta">厂商标称显存折算后再扣除安全水位</span>
-        </div>
-        <div class="ha-detail-card">
-          <span class="ha-detail-label">{gpu_count_by_memory} 张卡空闲显存</span>
-          <span class="ha-detail-value">{free_capacity_gib:.1f} GiB</span>
-          <span class="ha-detail-meta">当前最小可行卡数下还剩 {free_ratio:.0%} 显存余量</span>
-        </div>
-        {previous_capacity_html}
-        <div class="ha-detail-card">
-          <span class="ha-detail-label">并发余量系数</span>
-          <span class="ha-detail-value">{fmt_value(result['concurrency_margin_ratio_p95'], 2)}</span>
-          <span class="ha-detail-meta">显存层面还能承接多少在途请求</span>
         </div>
       </div>
       {section_html}
