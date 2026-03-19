@@ -15,7 +15,7 @@ from ui.views import (
 
 from .constants import KV_TABLE_HEADERS, REQUEST_TABLE_HEADERS
 from .config import UIInputs
-from .runtime import build_config_section_header_html
+from .runtime import build_config_section_header_html, build_traffic_mode_hint_html, build_traffic_playbook_html
 
 
 @dataclass(frozen=True)
@@ -23,8 +23,12 @@ class SidebarComponents:
     model_dropdown: Any
     precision_dropdown: Any
     gpu_preset_key: Any
+    traffic_playbook_html: Any
+    traffic_mode_hint_html: Any
     qps_estimation_mode: Any
+    qps_direct_group: Any
     lambda_peak_qps: Any
+    qps_poisson_group: Any
     daily_request_count: Any
     qps_burst_factor_pct: Any
     poisson_time_window_sec: Any
@@ -34,6 +38,8 @@ class SidebarComponents:
     ttft_p95_sec: Any
     e2e_p95_sec: Any
     concurrency_estimation_mode: Any
+    concurrency_little_group: Any
+    concurrency_direct_group: Any
     direct_peak_concurrency: Any
     concurrency_safety_factor_pct: Any
     weight_overhead_ratio: Any
@@ -121,87 +127,172 @@ def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
                     build_config_section_header_html(
                         "🚦",
                         "业务目标",
-                        "支持直接峰值 QPS、泊松日均反推 QPS，以及 Little/直接在途两种显存口径。",
+                        "按“流量来源 → 在途口径 → 请求画像”分步骤填写，界面只显示当前模式真正需要的字段。",
                     )
                 )
+                traffic_playbook_html = gr.HTML(build_traffic_playbook_html())
                 qps_estimation_mode = gr.Radio(
-                    label="QPS 建模方式",
+                    label="第 1 步：流量来源",
                     choices=[
-                        ("直接输入峰值 QPS", "direct_peak_qps"),
-                        ("泊松日均反推峰值 QPS", "poisson_from_daily_requests"),
+                        ("我已经知道峰值 QPS", "direct_peak_qps"),
+                        ("我只有日调用量", "poisson_from_daily_requests"),
                     ],
                     value=defaults.qps_estimation_mode,
-                    elem_classes=["compact-radio"],
+                    elem_classes=["compact-radio", "compact-radio-dual"],
+                )
+                traffic_mode_hint_html = gr.HTML(
+                    build_traffic_mode_hint_html(
+                        defaults.qps_estimation_mode,
+                        defaults.concurrency_estimation_mode,
+                    )
+                )
+                with gr.Group(
+                    visible=defaults.qps_estimation_mode == "direct_peak_qps",
+                    elem_classes=["traffic-mode-panel", "traffic-mode-panel-direct"],
+                ) as qps_direct_group:
+                    gr.HTML(
+                        """
+                        <div class="traffic-subsection-head">
+                          <div class="traffic-subsection-kicker">峰值请求率</div>
+                          <div class="traffic-subsection-title">你已经有峰值监控或压测结果</div>
+                          <div class="traffic-subsection-copy">直接填写模型调用层面的峰值 QPS。若这是用户请求 QPS，请先折算成模型调用 QPS。</div>
+                        </div>
+                        """
+                    )
+                    with gr.Row(elem_classes=["config-field-grid"]):
+                        lambda_peak_qps = gr.Number(
+                            label="峰值 QPS",
+                            value=defaults.lambda_peak_qps,
+                            precision=2,
+                            info="不知道时，不要硬填；切到“我只有日调用量”更合适。",
+                        )
+                with gr.Group(
+                    visible=defaults.qps_estimation_mode == "poisson_from_daily_requests",
+                    elem_classes=["traffic-mode-panel", "traffic-mode-panel-poisson"],
+                ) as qps_poisson_group:
+                    gr.HTML(
+                        """
+                        <div class="traffic-subsection-head">
+                          <div class="traffic-subsection-kicker">日调用量反推峰值</div>
+                          <div class="traffic-subsection-title">你没有峰值 QPS，但有日调用量</div>
+                          <div class="traffic-subsection-copy">系统会用 Poisson 分位数从日调用量反推 sizing 使用的峰值 QPS。没有更细日志时，建议先试：高峰放大 200%、时间窗 10s、分位数 99%。</div>
+                        </div>
+                        """
+                    )
+                    with gr.Row(elem_classes=["config-field-grid"]):
+                        daily_request_count = gr.Number(
+                            label="日调用量",
+                            value=defaults.daily_request_count,
+                            precision=0,
+                            info="按模型调用次数填，不是用户会话数。",
+                        )
+                        qps_burst_factor_pct = gr.Number(
+                            label="高峰放大系数 (%)",
+                            value=defaults.qps_burst_factor_pct,
+                            precision=0,
+                            info="没有更细数据时，建议先用 200%。",
+                        )
+                    with gr.Row(elem_classes=["config-field-grid"]):
+                        poisson_time_window_sec = gr.Number(
+                            label="统计时间窗 (s)",
+                            value=defaults.poisson_time_window_sec,
+                            precision=2,
+                            info="推荐先用 10s；越小越保守。",
+                        )
+                        poisson_qps_quantile_pct = gr.Number(
+                            label="分位数 (%)",
+                            value=defaults.poisson_qps_quantile_pct,
+                            precision=0,
+                            info="推荐先用 99%。",
+                        )
+                concurrency_estimation_mode = gr.Radio(
+                    label="第 2 步：峰值在途口径",
+                    choices=[
+                        ("我没有并发监控，用 Little 近似", "little_law"),
+                        ("我已经知道峰值在途请求量", "direct_peak_concurrency"),
+                    ],
+                    value=defaults.concurrency_estimation_mode,
+                    elem_classes=["compact-radio", "compact-radio-dual"],
+                )
+                with gr.Group(
+                    visible=defaults.concurrency_estimation_mode == "little_law",
+                    elem_classes=["traffic-mode-panel", "traffic-mode-panel-little"],
+                ) as concurrency_little_group:
+                    gr.HTML(
+                        """
+                        <div class="traffic-subsection-head">
+                          <div class="traffic-subsection-kicker">Little 定律近似</div>
+                          <div class="traffic-subsection-title">适合大多数还没有在线并发监控的场景</div>
+                          <div class="traffic-subsection-copy">系统会按“峰值 QPS × E2E × 安全系数”估算峰值在途请求量。默认先用 110% 安全系数即可。</div>
+                        </div>
+                        """
+                    )
+                    with gr.Row(elem_classes=["config-field-grid"]):
+                        concurrency_safety_factor_pct = gr.Number(
+                            label="在途安全系数 (%)",
+                            value=defaults.concurrency_safety_factor_pct,
+                            precision=0,
+                            info="没有额外排队风险时，建议先用 110%。",
+                        )
+                with gr.Group(
+                    visible=defaults.concurrency_estimation_mode == "direct_peak_concurrency",
+                    elem_classes=["traffic-mode-panel", "traffic-mode-panel-direct-concurrency"],
+                ) as concurrency_direct_group:
+                    gr.HTML(
+                        """
+                        <div class="traffic-subsection-head">
+                          <div class="traffic-subsection-kicker">直接输入峰值在途</div>
+                          <div class="traffic-subsection-title">适合你已经有服务端活跃请求监控</div>
+                          <div class="traffic-subsection-copy">直接填写系统峰值时刻同时挂着的请求量。没有这类监控时，不建议选这个模式。</div>
+                        </div>
+                        """
+                    )
+                    with gr.Row(elem_classes=["config-field-grid"]):
+                        direct_peak_concurrency = gr.Number(
+                            label="峰值在途请求量",
+                            value=defaults.direct_peak_concurrency,
+                            precision=0,
+                            info="来自网关、调度器或服务日志里的活跃请求峰值。",
+                        )
+                gr.HTML(
+                    """
+                    <div class="traffic-subsection-head traffic-subsection-head-profile">
+                      <div class="traffic-subsection-kicker">第 3 步：请求画像与时延目标</div>
+                      <div class="traffic-subsection-title">不知道怎么填时，先用默认业务画像</div>
+                      <div class="traffic-subsection-copy">默认值对应“长上下文 + 长输出”的保守在线问答口径。若你的业务更轻，请把输入/输出长度调低，否则会明显高估卡数。</div>
+                      <div class="traffic-profile-strip">
+                        <span class="traffic-profile-pill">轻问答: 输入 500 / 输出 200</span>
+                        <span class="traffic-profile-pill">中等分析: 输入 1000 / 输出 300</span>
+                        <span class="traffic-profile-pill traffic-profile-pill-active">保守默认: 输入 3000 / 输出 1000</span>
+                      </div>
+                    </div>
+                    """
                 )
                 with gr.Row(elem_classes=["config-field-grid"]):
-                    lambda_peak_qps = gr.Number(
-                        label="峰值 QPS",
-                        value=defaults.lambda_peak_qps,
-                        precision=2,
-                    )
-                    daily_request_count = gr.Number(
-                        label="日调用量",
-                        value=defaults.daily_request_count,
-                        precision=0,
-                    )
-                with gr.Row(elem_classes=["config-field-grid"]):
-                    qps_burst_factor_pct = gr.Number(
-                        label="QPS 高峰放大系数 (%)",
-                        value=defaults.qps_burst_factor_pct,
-                        precision=0,
-                    )
-                    poisson_time_window_sec = gr.Number(
-                        label="Poisson 时间窗 (s)",
-                        value=defaults.poisson_time_window_sec,
-                        precision=2,
-                    )
-                with gr.Row(elem_classes=["config-field-grid"]):
-                    poisson_qps_quantile_pct = gr.Number(
-                        label="Poisson 分位数 (%)",
-                        value=defaults.poisson_qps_quantile_pct,
-                        precision=0,
-                    )
-                    concurrency_estimation_mode = gr.Radio(
-                        label="在途建模方式",
-                        choices=[
-                            ("Little 定律近似", "little_law"),
-                            ("直接输入峰值在途", "direct_peak_concurrency"),
-                        ],
-                        value=defaults.concurrency_estimation_mode,
-                        elem_classes=["compact-radio"],
-                    )
-                with gr.Row(elem_classes=["config-field-grid"]):
-                    direct_peak_concurrency = gr.Number(
-                        label="峰值在途请求量",
-                        value=defaults.direct_peak_concurrency,
-                        precision=0,
-                    )
-                    concurrency_safety_factor_pct = gr.Number(
-                        label="在途安全系数 (%)",
-                        value=defaults.concurrency_safety_factor_pct,
-                        precision=0,
-                    )
-                with gr.Row(elem_classes=["config-field-grid"]):
                     p95_input_tokens = gr.Number(
-                        label="输入长度",
+                        label="P95 输入长度",
                         value=defaults.p95_input_tokens,
                         precision=0,
+                        info="按 token 填。默认 3000 偏保守。",
                     )
                     p95_output_tokens = gr.Number(
-                        label="输出长度",
+                        label="P95 输出长度",
                         value=defaults.p95_output_tokens,
                         precision=0,
+                        info="长输出场景最容易把 G_dec 拉高。",
                     )
                 with gr.Row(elem_classes=["config-field-grid"]):
                     ttft_p95_sec = gr.Number(
                         label="TTFT 目标 (s)",
                         value=defaults.ttft_p95_sec,
                         precision=2,
+                        info="不知道时先用 3s。",
                     )
                     e2e_p95_sec = gr.Number(
                         label="E2E 目标 (s)",
                         value=defaults.e2e_p95_sec,
                         precision=2,
+                        info="不知道时先用 120s，且必须大于 TTFT。",
                     )
 
             with gr.Row(elem_classes=["button-row"]):
@@ -211,8 +302,12 @@ def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
         model_dropdown=model_dropdown,
         precision_dropdown=precision_dropdown,
         gpu_preset_key=gpu_preset_key,
+        traffic_playbook_html=traffic_playbook_html,
+        traffic_mode_hint_html=traffic_mode_hint_html,
         qps_estimation_mode=qps_estimation_mode,
+        qps_direct_group=qps_direct_group,
         lambda_peak_qps=lambda_peak_qps,
+        qps_poisson_group=qps_poisson_group,
         daily_request_count=daily_request_count,
         qps_burst_factor_pct=qps_burst_factor_pct,
         poisson_time_window_sec=poisson_time_window_sec,
@@ -222,6 +317,8 @@ def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
         ttft_p95_sec=ttft_p95_sec,
         e2e_p95_sec=e2e_p95_sec,
         concurrency_estimation_mode=concurrency_estimation_mode,
+        concurrency_little_group=concurrency_little_group,
+        concurrency_direct_group=concurrency_direct_group,
         direct_peak_concurrency=direct_peak_concurrency,
         concurrency_safety_factor_pct=concurrency_safety_factor_pct,
         weight_overhead_ratio=weight_overhead_ratio,

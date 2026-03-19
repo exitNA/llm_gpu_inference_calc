@@ -3,7 +3,7 @@ from __future__ import annotations
 from typing import Any
 
 from .analysis import reset_all, run_analysis
-from .runtime import update_precision_choices
+from .runtime import update_precision_choices, update_traffic_input_visibility
 from .sections import ResultComponents, SidebarComponents
 
 
@@ -41,6 +41,13 @@ def bind_events(*, sidebar: SidebarComponents, results: ResultComponents, demo: 
         results.calc_text,
         results.raw_json,
     ]
+    traffic_visibility_outputs = [
+        sidebar.traffic_mode_hint_html,
+        sidebar.qps_direct_group,
+        sidebar.qps_poisson_group,
+        sidebar.concurrency_little_group,
+        sidebar.concurrency_direct_group,
+    ]
 
     def run_analysis_safe(*values: Any):
         try:
@@ -56,6 +63,17 @@ def bind_events(*, sidebar: SidebarComponents, results: ResultComponents, demo: 
         outputs=sidebar.precision_dropdown,
     )
 
+    sidebar.qps_estimation_mode.change(
+        fn=update_traffic_input_visibility,
+        inputs=[sidebar.qps_estimation_mode, sidebar.concurrency_estimation_mode],
+        outputs=traffic_visibility_outputs,
+    )
+    sidebar.concurrency_estimation_mode.change(
+        fn=update_traffic_input_visibility,
+        inputs=[sidebar.qps_estimation_mode, sidebar.concurrency_estimation_mode],
+        outputs=traffic_visibility_outputs,
+    )
+
     for component in inputs:
         component.change(
             fn=run_analysis_safe,
@@ -63,5 +81,13 @@ def bind_events(*, sidebar: SidebarComponents, results: ResultComponents, demo: 
             outputs=outputs,
         )
 
-    sidebar.reset_button.click(fn=reset_all, outputs=[*inputs, *outputs])
-    demo.load(fn=run_analysis, inputs=inputs, outputs=outputs)
+    sidebar.reset_button.click(fn=reset_all, outputs=[*inputs, *outputs]).then(
+        fn=update_traffic_input_visibility,
+        inputs=[sidebar.qps_estimation_mode, sidebar.concurrency_estimation_mode],
+        outputs=traffic_visibility_outputs,
+    )
+    demo.load(fn=run_analysis, inputs=inputs, outputs=outputs).then(
+        fn=update_traffic_input_visibility,
+        inputs=[sidebar.qps_estimation_mode, sidebar.concurrency_estimation_mode],
+        outputs=traffic_visibility_outputs,
+    )

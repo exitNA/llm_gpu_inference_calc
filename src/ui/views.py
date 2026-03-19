@@ -10,6 +10,28 @@ from .common import (
     render_math_text,
 )
 
+
+def _format_ratio_percent(ratio: float) -> str:
+    return f"{ratio * 100:.0f}%"
+
+
+def _format_memory_basis(value_gib: float) -> str:
+    if value_gib >= 1:
+        return f"{value_gib:.1f} GiB"
+    return f"{value_gib * 1024:.1f} MiB"
+
+
+def _precision_unit_label(precision: str) -> str:
+    mapping = {
+        "fp32": "4 bytes",
+        "fp16": "2 bytes",
+        "bf16": "2 bytes",
+        "fp8": "1 byte",
+        "int8": "1 byte",
+        "int4": "0.5 byte",
+    }
+    return mapping.get(precision.lower(), precision)
+
 def build_request_detail_rows(result: dict[str, Any]) -> list[list[str]]:
     rows = []
     for item in result.get("request_profile_rows", []):
@@ -138,45 +160,66 @@ def build_overview_html(result: dict[str, Any]) -> str:
 
 
 def build_memory_analysis_html(result: dict[str, Any]) -> str:
+    model = result["model_config"]
+    runtime = result["runtime_config"]
     weight_gib = result["weight_with_overhead_gib"]
     runtime_gib = result["runtime_overhead_gib"]
     total_memory_gib = result["memory_for_sizing_gib"]
     usable_vram_gib = result["usable_vram_gib_per_gpu"]
     gpu_count_by_memory = result["gpu_count_by_memory"]
     peak_cache_gib = max(total_memory_gib - weight_gib - runtime_gib, 0.0)
+    per_request_cache_gib = result["p95_kv_gib_per_request"]
+    c_peak_budget = result["c_peak_budget"]
     required_gpu_ratio = total_memory_gib / usable_vram_gib if usable_vram_gib > 0 else 0.0
     previous_gpu_count = max(gpu_count_by_memory - 1, 0)
     previous_capacity_gib = previous_gpu_count * usable_vram_gib
     current_capacity_gib = gpu_count_by_memory * usable_vram_gib
+    free_capacity_gib = max(current_capacity_gib - total_memory_gib, 0.0)
+    used_ratio = total_memory_gib / current_capacity_gib if current_capacity_gib > 0 else 0.0
+    free_ratio = free_capacity_gib / current_capacity_gib if current_capacity_gib > 0 else 0.0
+    weight_formula = (
+        f"{model.num_params_billion:.0f}B × {_precision_unit_label(runtime.precision)} × "
+        f"(1 + {_format_ratio_percent(runtime.weight_overhead_ratio)})"
+    )
+    runtime_formula = f"Mw × α_r = {weight_gib:.1f} × {_format_ratio_percent(runtime.runtime_overhead_ratio)}"
+    cache_formula = f"{fmt_compact(c_peak_budget)} req × {_format_memory_basis(per_request_cache_gib)} / req"
+    free_formula = f"{gpu_count_by_memory} × {usable_vram_gib:.1f} - {total_memory_gib:.1f}"
 
-    causes = [
-        ("权重显存", weight_gib, "模型加载后的权重占用"),
-        ("固定显存", runtime_gib, "框架与运行时常驻开销"),
-        ("Cache 需求", peak_cache_gib, "按并发预算估算的请求缓存占用"),
+    segments = [
+        ("权重", weight_gib, "bg-weight", "dot-weight", "模型权重", weight_formula),
+        ("固定", runtime_gib, "bg-runtime", "dot-runtime", "框架常驻", runtime_formula),
+        ("Cache", peak_cache_gib, "bg-kv", "dot-kv", "请求缓存", cache_formula),
+        ("空闲", free_capacity_gib, "bg-free", "dot-free", "剩余余量", free_formula),
     ]
-    dominant_cause_title = max(causes, key=lambda item: item[1])[0]
-    cause_cards = []
-    for title, value, reason in causes:
-        share = value / total_memory_gib if total_memory_gib > 0 else 0.0
-        cause_cards.append(
-            f"""
-        <div class="constraint-card memory-cause-card{' cause-dominant' if title == dominant_cause_title else ''}">
-          <span class="constraint-title">{title}</span>
-          <span class="constraint-value">{value:.1f}</span>
-          <span class="constraint-unit">GiB</span>
-          <span class="constraint-reason">{reason}</span>
-          <span class="memory-cause-share">占总需求 {share:.0%}</span>
+    disk_segments_html = "".join(
+        f'<div class="mac-disk-segment {segment_class}" style="width:{(value / current_capacity_gib * 100) if current_capacity_gib > 0 else 0:.4f}%"></div>'
+        for _label, value, segment_class, _dot_class, _detail, _formula in segments
+        if value > 0
+    )
+    legend_html = "".join(
+        f"""
+        <div class="mac-disk-legend-item">
+          <span class="mem-legend-dot {dot_class}"></span>
+          <div class="mac-disk-legend-text">
+            <div class="mac-disk-legend-top">
+              <span class="mem-legend-name">{label}</span>
+              <span class="mem-legend-value">{value:.1f} GiB</span>
+            </div>
+            <span class="mac-disk-detail-text">{detail}</span>
+            <span class="mac-disk-formula-text">{formula}</span>
+          </div>
         </div>
         """
-        )
-    cause_cards_html = "".join(cause_cards)
+        for label, value, _segment_class, dot_class, detail, formula in segments
+        if value > 0
+    )
     calc_sections = result.get("calculation_process_sections", [])
     section_html = render_calc_accordion("显存约束计算细节", calc_sections[1] if len(calc_sections) > 1 else None)
     previous_capacity_html = ""
     if previous_gpu_count > 0:
         previous_capacity_html = f"""
         <div class="ha-detail-card memory-threshold-card">
-          <span class="ha-detail-label">{previous_gpu_count} 张卡总容量</span>
+          <span class="ha-detail-label">{previous_gpu_count} 张卡仍不够</span>
           <span class="ha-detail-value">{previous_capacity_gib:.1f} GiB</span>
           <span class="ha-detail-meta">仍低于 {total_memory_gib:.1f} GiB，因此不够装下</span>
         </div>
@@ -191,66 +234,67 @@ def build_memory_analysis_html(result: dict[str, Any]) -> str:
         </div>
       </div>
       <div class="memory-causality-shell">
-        <div class="memory-cause-cluster">
-          <div class="memory-cause-heading">
-            <span class="memory-cause-kicker">原因：显存被这三部分占用</span>
-            <span class="memory-cause-summary">先把显存用量加总，再除以单卡有效显存，最后向上取整得到卡数。</span>
-          </div>
-          <div class="constraint-grid memory-cause-grid">
-            {cause_cards_html}
-          </div>
-          <div class="memory-rollup-strip">
-            <div class="memory-rollup-item">
-              <span class="memory-rollup-label">总显存需求</span>
-              <span class="memory-rollup-value">{total_memory_gib:.1f} GiB</span>
-            </div>
-            <span class="memory-rollup-operator">/</span>
-            <div class="memory-rollup-item">
-              <span class="memory-rollup-label">单卡有效显存</span>
-              <span class="memory-rollup-value">{usable_vram_gib:.1f} GiB</span>
-            </div>
-            <span class="memory-rollup-operator">=</span>
-            <div class="memory-rollup-item memory-rollup-emphasis">
-              <span class="memory-rollup-label">理论需求</span>
-              <span class="memory-rollup-value">{required_gpu_ratio:.2f} 张</span>
-            </div>
-          </div>
-        </div>
-        <div class="memory-causal-arrow" aria-hidden="true">→</div>
         <div class="memory-result-spotlight">
-          <span class="memory-result-kicker">结果：显存约束卡数</span>
+          <span class="memory-result-kicker">显存约束结果</span>
           <div class="memory-result-main">
             <span class="memory-result-value">{gpu_count_by_memory}</span>
             <span class="memory-result-unit">GPUs</span>
           </div>
-          <span class="memory-result-caption">显存口径下至少需要这么多卡</span>
+          <span class="memory-result-caption">显存口径下的最小卡数</span>
           <div class="memory-result-proof">
             <span class="memory-result-formula">{total_memory_gib:.1f} / {usable_vram_gib:.1f} = {required_gpu_ratio:.2f}</span>
-            <span class="memory-result-note">卡数必须取整数，所以向上取整后得到 {gpu_count_by_memory} 张。</span>
+            <span class="memory-result-note">单卡有效显存 {usable_vram_gib:.1f} GiB，向上取整后得到 {gpu_count_by_memory} 张。</span>
+          </div>
+        </div>
+        <div class="memory-cause-cluster">
+          <div class="memory-cause-heading">
+            <span class="memory-cause-kicker">显存分布</span>
+            <span class="memory-cause-summary">{gpu_count_by_memory} 张卡拼出的有效显存池为 {current_capacity_gib:.1f} GiB。下方分段条同时展示权重、固定开销、请求 Cache 和剩余空闲。</span>
+          </div>
+          <div class="mac-disk-layout">
+            <div class="mac-disk-header">
+              <span class="mac-disk-title">{gpu_count_by_memory} 张卡的有效显存池</span>
+              <span class="mac-disk-capacity">{current_capacity_gib:.1f} GiB</span>
+            </div>
+            <div class="mac-disk-bar" aria-hidden="true">
+              {disk_segments_html}
+            </div>
+            <div class="mac-disk-legend">
+              {legend_html}
+            </div>
+          </div>
+          <div class="memory-rollup-strip memory-rollup-strip-compact">
+            <div class="memory-rollup-item">
+              <span class="memory-rollup-label">已占用</span>
+              <span class="memory-rollup-value">{total_memory_gib:.1f} GiB</span>
+            </div>
+            <div class="memory-rollup-item">
+              <span class="memory-rollup-label">空闲</span>
+              <span class="memory-rollup-value">{free_capacity_gib:.1f} GiB</span>
+            </div>
+            <div class="memory-rollup-item memory-rollup-emphasis">
+              <span class="memory-rollup-label">利用率</span>
+              <span class="memory-rollup-value">{used_ratio:.0%}</span>
+            </div>
           </div>
         </div>
       </div>
       <div class="ha-detail-grid memory-support-grid">
         <div class="ha-detail-card">
-          <span class="ha-detail-label">总显存需求</span>
-          <span class="ha-detail-value">{total_memory_gib:.1f} GiB</span>
-          <span class="ha-detail-meta">按字节换算后的二进制容量</span>
-        </div>
-        <div class="ha-detail-card">
           <span class="ha-detail-label">单卡有效显存</span>
           <span class="ha-detail-value">{usable_vram_gib:.1f} GiB</span>
-          <span class="ha-detail-meta">由厂商标称显存折算并扣除安全水位</span>
+          <span class="ha-detail-meta">厂商标称显存折算后再扣除安全水位</span>
+        </div>
+        <div class="ha-detail-card">
+          <span class="ha-detail-label">{gpu_count_by_memory} 张卡空闲显存</span>
+          <span class="ha-detail-value">{free_capacity_gib:.1f} GiB</span>
+          <span class="ha-detail-meta">当前最小可行卡数下还剩 {free_ratio:.0%} 显存余量</span>
         </div>
         {previous_capacity_html}
-        <div class="ha-detail-card memory-threshold-card memory-threshold-card-current">
-          <span class="ha-detail-label">{gpu_count_by_memory} 张卡总容量</span>
-          <span class="ha-detail-value">{current_capacity_gib:.1f} GiB</span>
-          <span class="ha-detail-meta">首次覆盖 {total_memory_gib:.1f} GiB 需求，因此这是最小可行值</span>
-        </div>
         <div class="ha-detail-card">
           <span class="ha-detail-label">并发余量系数</span>
           <span class="ha-detail-value">{fmt_value(result['concurrency_margin_ratio_p95'], 2)}</span>
-          <span class="ha-detail-meta">显存上还能承接多少在途请求</span>
+          <span class="ha-detail-meta">显存层面还能承接多少在途请求</span>
         </div>
       </div>
       {section_html}
