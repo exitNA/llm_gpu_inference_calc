@@ -90,10 +90,10 @@ def build_overview_html(result: dict[str, Any]) -> str:
             <span class="result-group-title">业务目标</span>
           </div>
           <div class="result-item-row">
-            <span class="result-item-label">QPS</span>
+            <span class="result-item-label">峰值 QPS</span>
             <div class="result-item-content">
-              <span class="result-item-value">{traffic.lambda_peak_qps:.2f}</span>
-              <span class="result-item-sub">业务请求速率</span>
+              <span class="result-item-value">{result['lambda_peak_qps_effective']:.2f}</span>
+              <span class="result-item-sub">{escape(result['qps_model_label'])}</span>
             </div>
           </div>
           <div class="result-item-row">
@@ -101,6 +101,13 @@ def build_overview_html(result: dict[str, Any]) -> str:
             <div class="result-item-content">
               <span class="result-item-value">{traffic.p95_total_tokens}</span>
               <span class="result-item-sub">总长度 tokens</span>
+            </div>
+          </div>
+          <div class="result-item-row">
+            <span class="result-item-label">峰值在途</span>
+            <div class="result-item-content">
+              <span class="result-item-value">{fmt_compact(result['c_peak_budget'])}</span>
+              <span class="result-item-sub">{escape(result['concurrency_model_label'])}</span>
             </div>
           </div>
         </div>

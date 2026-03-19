@@ -42,6 +42,13 @@ class TrafficConfig:
     e2e_p95_target_sec: float
     p95_total_tokens_override: int | None = None
     concurrency_safety_factor: float = 1.0
+    qps_estimation_mode: str = "direct_peak_qps"
+    daily_request_count: float | None = None
+    qps_burst_factor: float = 1.0
+    poisson_time_window_sec: float = 1.0
+    poisson_qps_quantile: float = 0.99
+    concurrency_estimation_mode: str = "little_law"
+    direct_peak_concurrency: float | None = None
 
     @property
     def p95_total_tokens(self) -> int:

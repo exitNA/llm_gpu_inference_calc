@@ -38,6 +38,67 @@ def _describe_cache_formula(model: ModelConfig, runtime: RuntimeConfig) -> str:
     return "自定义 attention cache 公式"
 
 
+def _build_qps_steps(result: dict[str, Any], traffic: TrafficConfig) -> list[dict[str, Any]]:
+    if traffic.qps_estimation_mode == "poisson_from_daily_requests":
+        return [
+            build_calc_step(
+                "日均请求量折算平均 QPS",
+                "λ_avg = Req_day / 86400",
+                f"{format_calc_number(traffic.daily_request_count)} / 86400",
+                f"{format_calc_number(result['lambda_avg_qps'])} req/s",
+            ),
+            build_calc_step(
+                "高峰时段平均 QPS",
+                "λ_base = λ_avg × 峰值放大系数",
+                f"{format_calc_number(result['lambda_avg_qps'])} × {format_calc_number(traffic.qps_burst_factor, 2)}",
+                f"{format_calc_number(result['qps_base_mean_qps'])} req/s",
+            ),
+            build_calc_step(
+                "泊松峰值 QPS",
+                "λ_peak = Q_q(Poisson(λ_base × Δt)) / Δt",
+                (
+                    f"Q_{format_calc_number(traffic.poisson_qps_quantile, 2)}"
+                    f"(Poisson({format_calc_number(result['qps_base_mean_qps'])} × "
+                    f"{format_calc_number(traffic.poisson_time_window_sec, 2)})) / "
+                    f"{format_calc_number(traffic.poisson_time_window_sec, 2)}"
+                ),
+                f"{format_calc_number(result['lambda_peak_qps_effective'])} req/s",
+                note="Poisson 分位数用于把平均到达率折算成 sizing 采用的峰值 QPS。",
+            ),
+        ]
+
+    return [
+        build_calc_step(
+            "峰值 QPS 输入",
+            "λ_peak = input",
+            f"{format_calc_number(traffic.lambda_peak_qps)}",
+            f"{format_calc_number(result['lambda_peak_qps_effective'])} req/s",
+        ),
+    ]
+
+
+def _build_concurrency_step(result: dict[str, Any], traffic: TrafficConfig) -> dict[str, Any]:
+    if traffic.concurrency_estimation_mode == "direct_peak_concurrency":
+        return build_calc_step(
+            "峰值在途预算",
+            "C_peak^budget = input",
+            f"{format_calc_number(traffic.direct_peak_concurrency)}",
+            f"{format_calc_number(result['c_peak_budget'])} req",
+            note="显存 sizing 直接采用输入的峰值在途请求量。",
+        )
+
+    return build_calc_step(
+        "峰值在途预算",
+        "C_peak^budget = λ_peak × E2E_p95 × 安全系数",
+        (
+            f"{format_calc_number(result['lambda_peak_qps_effective'])} × "
+            f"{format_calc_number(traffic.e2e_p95_target_sec)} × "
+            f"{format_calc_number(traffic.concurrency_safety_factor)}"
+        ),
+        f"{format_calc_number(result['c_peak_budget'])} req",
+    )
+
+
 def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str, Any]]:
     traffic: TrafficConfig = result["traffic_config"]
     runtime: RuntimeConfig = result["runtime_config"]
@@ -47,12 +108,13 @@ def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str,
     return [
         {
             "title": "业务目标折算",
-            "summary": "把峰值 QPS、P95 长度和 P95 时延目标折算成 sizing 所需的吞吐与在途约束。",
+            "summary": "先解析 QPS 与峰值在途口径，再把 P95 长度和 P95 时延目标折算成 sizing 所需的吞吐与显存约束。",
             "steps": [
+                *_build_qps_steps(result, traffic),
                 build_calc_step("P95 总长度", "S_p95 = S_in,p95 + S_out,p95", f"{traffic.p95_input_tokens} + {traffic.p95_output_tokens}", f"{traffic.p95_total_tokens} tokens"),
-                build_calc_step("峰值 Prefill 工作量", "TPS_pre,target^peak = λ_peak × S_in,p95", f"{format_calc_number(traffic.lambda_peak_qps)} × {traffic.p95_input_tokens}", f"{format_adaptive_tps(result['tps_pre_target_peak'])}"),
-                build_calc_step("峰值 Decode 工作量", "TPS_dec,target^peak = λ_peak × S_out,p95", f"{format_calc_number(traffic.lambda_peak_qps)} × {traffic.p95_output_tokens}", f"{format_adaptive_tps(result['tps_dec_target_peak'])}"),
-                build_calc_step("峰值在途预算", "C_peak^budget = λ_peak × E2E_p95 × 安全系数", f"{format_calc_number(traffic.lambda_peak_qps)} × {format_calc_number(traffic.e2e_p95_target_sec)} × {format_calc_number(traffic.concurrency_safety_factor)}", f"{format_calc_number(result['c_peak_budget'])} req"),
+                build_calc_step("峰值 Prefill 工作量", "TPS_pre,target^peak = λ_peak × S_in,p95", f"{format_calc_number(result['lambda_peak_qps_effective'])} × {traffic.p95_input_tokens}", f"{format_adaptive_tps(result['tps_pre_target_peak'])}"),
+                build_calc_step("峰值 Decode 工作量", "TPS_dec,target^peak = λ_peak × S_out,p95", f"{format_calc_number(result['lambda_peak_qps_effective'])} × {traffic.p95_output_tokens}", f"{format_adaptive_tps(result['tps_dec_target_peak'])}"),
+                _build_concurrency_step(result, traffic),
                 build_calc_step("P95 Decode 时间预算", "T_dec,p95 = E2E_p95 - TTFT_p95", f"{format_calc_number(traffic.e2e_p95_target_sec)} - {format_calc_number(traffic.ttft_p95_target_sec)}", f"{format_calc_number(result['decode_p95_budget_sec'])} s"),
             ],
         },

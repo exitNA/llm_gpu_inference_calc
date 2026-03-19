@@ -44,7 +44,7 @@ DEFAULT_BUSINESS_PROFILE = BusinessProfile(
     ttft_p95_sec=3,
     e2e_p95_sec=120,
     concurrency_safety_factor=1.1,
-    note="默认画像使用峰值 QPS 与 P95 输入输出长度、P95 时延目标作为 sizing 主口径。",
+    note="默认画像继续使用直接输入峰值 QPS 与 Little 定律近似；界面也支持泊松日均反推 QPS 与直接输入峰值在途。",
 )
 
 DEFAULT_MODEL_PRESET_KEY = "deepseek_r1_671b"

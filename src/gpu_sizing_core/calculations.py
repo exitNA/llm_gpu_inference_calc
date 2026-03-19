@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import math
+from statistics import NormalDist
+
 from .constants import SECONDS_PER_DAY
 from .helpers import ceil_div, divide_optional, floor_div, multiply_optional, precision_to_bytes, vendor_vram_gb_to_bytes
 from .models import GPUConfig, ModelConfig, RuntimeConfig, TrafficConfig
@@ -87,12 +90,88 @@ def estimate_request_stats(traffic: TrafficConfig) -> dict[str, float]:
     }
 
 
-def estimate_workload_targets(traffic: TrafficConfig) -> dict[str, float]:
-    c_peak_budget = traffic.lambda_peak_qps * traffic.e2e_p95_target_sec * traffic.concurrency_safety_factor
+def poisson_quantile(mean: float, quantile: float) -> int:
+    if mean < 0:
+        raise ValueError("Poisson mean 必须大于等于 0")
+    if not 0 < quantile < 1:
+        raise ValueError("poisson_qps_quantile 必须位于 (0, 1) 内")
+    if mean == 0:
+        return 0
+    if mean < 200:
+        k = 0
+        pmf = math.exp(-mean)
+        cdf = pmf
+        while cdf < quantile:
+            k += 1
+            pmf *= mean / k
+            cdf += pmf
+        return k
+
+    # 大均值区间使用正态近似，避免递推在极小概率项上数值下溢。
+    z_score = NormalDist().inv_cdf(quantile)
+    approx = mean + z_score * math.sqrt(mean) + (z_score * z_score - 1.0) / 6.0
+    return max(int(math.ceil(approx)), 0)
+
+
+def resolve_peak_qps(traffic: TrafficConfig) -> dict[str, float | int | str | None]:
+    if traffic.qps_estimation_mode == "poisson_from_daily_requests":
+        if traffic.daily_request_count is None:
+            raise ValueError("Poisson QPS 模式需要 daily_request_count")
+        avg_qps = traffic.daily_request_count / SECONDS_PER_DAY
+        base_mean_qps = avg_qps * traffic.qps_burst_factor
+        bucket_seconds = traffic.poisson_time_window_sec
+        bucket_mean_arrivals = base_mean_qps * bucket_seconds
+        bucket_quantile_arrivals = poisson_quantile(bucket_mean_arrivals, traffic.poisson_qps_quantile)
+        effective_peak_qps = bucket_quantile_arrivals / bucket_seconds
+        return {
+            "lambda_peak_qps_effective": effective_peak_qps,
+            "lambda_avg_qps": avg_qps,
+            "qps_base_mean_qps": base_mean_qps,
+            "poisson_bucket_mean_arrivals": bucket_mean_arrivals,
+            "poisson_bucket_quantile_arrivals": float(bucket_quantile_arrivals),
+            "qps_model_label": "泊松日均反推峰值 QPS",
+            "qps_model_note": "先用日均调用量折算平均 QPS，再乘高峰放大系数，并取 Poisson 时间窗分位数作为 sizing 峰值 QPS。",
+        }
+
     return {
-        "tps_pre_target_peak": traffic.lambda_peak_qps * traffic.p95_input_tokens,
-        "tps_dec_target_peak": traffic.lambda_peak_qps * traffic.p95_output_tokens,
+        "lambda_peak_qps_effective": traffic.lambda_peak_qps,
+        "lambda_avg_qps": traffic.daily_request_count / SECONDS_PER_DAY if traffic.daily_request_count is not None else None,
+        "qps_base_mean_qps": None,
+        "poisson_bucket_mean_arrivals": None,
+        "poisson_bucket_quantile_arrivals": None,
+        "qps_model_label": "直接输入峰值 QPS",
+        "qps_model_note": "直接采用输入峰值 QPS 作为 sizing 主口径。",
+    }
+
+
+def resolve_peak_concurrency(traffic: TrafficConfig, lambda_peak_qps_effective: float) -> dict[str, float | str | None]:
+    if traffic.concurrency_estimation_mode == "direct_peak_concurrency":
+        if traffic.direct_peak_concurrency is None:
+            raise ValueError("直接在途模式需要 direct_peak_concurrency")
+        return {
+            "c_peak_budget": float(traffic.direct_peak_concurrency),
+            "concurrency_model_label": "直接输入峰值在途请求量",
+            "concurrency_model_note": "显存 sizing 直接采用输入的峰值在途请求量，不再由 Little 定律近似回推。",
+        }
+
+    c_peak_budget = lambda_peak_qps_effective * traffic.e2e_p95_target_sec * traffic.concurrency_safety_factor
+    return {
         "c_peak_budget": c_peak_budget,
+        "concurrency_model_label": "Little 定律近似",
+        "concurrency_model_note": "峰值在途预算由峰值 QPS、E2E P95 与安全系数近似折算。",
+    }
+
+
+def estimate_workload_targets(traffic: TrafficConfig) -> dict[str, float | int | str | None]:
+    qps_info = resolve_peak_qps(traffic)
+    lambda_peak_qps_effective = float(qps_info["lambda_peak_qps_effective"])
+    concurrency_info = resolve_peak_concurrency(traffic, lambda_peak_qps_effective)
+    return {
+        "tps_pre_target_peak": lambda_peak_qps_effective * traffic.p95_input_tokens,
+        "tps_dec_target_peak": lambda_peak_qps_effective * traffic.p95_output_tokens,
+        "c_peak_budget": float(concurrency_info["c_peak_budget"]),
+        **qps_info,
+        **concurrency_info,
     }
 
 
@@ -298,7 +377,7 @@ def estimate_capacity_backprojection(
     if not latency_info["prefill_latency_ok"] or not latency_info["decode_latency_ok"]:
         latency_risk = "high"
         latency_note = "单卡时延必要条件不满足，仅增加总卡数通常无法直接解决时延目标。"
-    elif lambda_p95 is not None and traffic.lambda_peak_qps >= lambda_p95 * 0.9:
+    elif lambda_p95 is not None and float(throughput_info["lambda_peak_qps_effective"]) >= lambda_p95 * 0.9:
         latency_risk = "medium"
         latency_note = "总量能力接近保守可持续 QPS，上线后排队与调度可能放大实际时延。"
     else:

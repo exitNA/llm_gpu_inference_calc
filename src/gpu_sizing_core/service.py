@@ -89,12 +89,16 @@ def evaluate_single_model(
         "business_gpu_count": business_gpu_count,
         "estimated_total_cost": estimated_total_cost,
         "unit_price": gpu.unit_price,
+        "qps_model_label": throughput_info["qps_model_label"],
+        "qps_model_note": throughput_info["qps_model_note"],
+        "concurrency_model_label": throughput_info["concurrency_model_label"],
+        "concurrency_model_note": throughput_info["concurrency_model_note"],
     }
 
     result["request_profile_rows"] = [
         {
-            "name": "峰值/P95口径",
-            "qps": traffic.lambda_peak_qps,
+            "name": f"峰值/P95口径 ({result['qps_model_label']})",
+            "qps": result["lambda_peak_qps_effective"],
             "input_tokens": traffic.p95_input_tokens,
             "output_tokens": traffic.p95_output_tokens,
             "total_tokens": traffic.p95_total_tokens,
@@ -127,6 +131,8 @@ def format_result_text(result: dict[str, Any]) -> str:
         "[主结果]",
         f"- G_req / 业务基线: {result['business_gpu_count']} 卡",
         f"- 主导约束: {' / '.join(result['dominant_constraints'])}",
+        f"- 峰值 QPS 口径: {result['qps_model_label']} -> {format_calc_number(result['lambda_peak_qps_effective'])} req/s",
+        f"- 在途口径: {result['concurrency_model_label']} -> {format_calc_number(result['c_peak_budget'])} req",
         "",
         "[约束拆解]",
         f"- G_mem: {result['gpu_count_by_memory']}",

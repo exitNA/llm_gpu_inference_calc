@@ -80,6 +80,79 @@ $$
 - 最大在途请求量；
 - 时延目标是否存在明显风险。
 
+### 2.1 计算流程图
+
+下图给出当前实现的整体计算流程。它把 `QPS` 建模、峰值在途建模、吞吐下界、显存下界和最终卡数汇总放在同一张图里，便于快速定位每个输入参数会影响哪一类约束。
+
+```mermaid
+flowchart TD
+    A[输入业务目标 模型参数 GPU参数] --> B[请求长度画像]
+    A --> C{QPS 建模方式}
+    A --> D{峰值在途建模方式}
+
+    B --> B1[P95 输入长度 S_in,p95]
+    B --> B2[P95 输出长度 S_out,p95]
+    B --> B3[P95 总长度 S_p95]
+
+    C -->|直接输入峰值 QPS| C1[读取 lambda_peak]
+    C -->|Poisson 日均反推| C2[Req_day -> lambda_avg]
+    C2 --> C3[lambda_base = lambda_avg x gamma_burst]
+    C3 --> C4[Q_q Poisson(lambda_base x delta_t) / delta_t]
+    C1 --> E[解析后的峰值 QPS lambda_peak]
+    C4 --> E
+
+    D -->|Little 定律近似| D1[C_peak = lambda_peak x E2E_p95 x rho_safe]
+    D -->|直接输入峰值在途| D2[C_peak = C_peak,input]
+
+    E --> F[峰值 Prefill 工作量]
+    E --> G[峰值 Decode 工作量]
+    E --> D1
+    B1 --> F
+    B2 --> G
+    D1 --> H[峰值在途预算 C_peak]
+    D2 --> H
+
+    F --> F1[TPS_pre,target = lambda_peak x S_in,p95]
+    G --> G1[TPS_dec,target = lambda_peak x S_out,p95]
+
+    F1 --> I[单卡 Prefill 吞吐 TPS_pre,card]
+    G1 --> J[单卡 Decode 吞吐 TPS_dec,card]
+    I --> I1[G_pre = ceil TPS_pre,target / TPS_pre,card]
+    J --> J1[G_dec = ceil TPS_dec,target / TPS_dec,card]
+
+    B3 --> K[单请求 Cache 显存]
+    H --> L[总 Cache 显存]
+    K --> L
+    A --> M[权重显存 Mw 与运行时固定显存 Mr]
+    A --> N[单卡有效显存 V_gpu,eff]
+    L --> O[G_mem = ceil Mw + Mr + M_cache / V_gpu,eff]
+    M --> O
+    N --> O
+
+    I --> P[Prefill 时延必要条件]
+    J --> Q[Decode 时延必要条件]
+
+    I1 --> R[G_req = max G_mem G_pre G_dec]
+    J1 --> R
+    O --> R
+
+    R --> S[能力回推]
+    S --> S1[总 Prefill/Decode 吞吐]
+    S --> S2[保守可持续 QPS]
+    S --> S3[日 token 总量]
+    S --> S4[显存最大在途请求量]
+    P --> T[时延风险判断]
+    Q --> T
+    R --> T
+```
+
+从这张图可以看到：
+
+- `QPS` 建模方式同时影响 Prefill 和 Decode 两条吞吐链路；
+- 峰值在途建模方式主要影响显存链路中的 `KV cache` 预算；
+- 最终卡数始终取 `G_mem`、`G_pre`、`G_dec` 三者最大值；
+- 时延目标不直接折算为总卡数，而是作为单卡能力层面的必要条件检查。
+
 ---
 
 ## 3. 输入参数与统计口径
@@ -93,6 +166,38 @@ $$
 - P95 单次总时延目标 $E2E_{p95}^{target}$。
 
 其中，$\lambda$ 的单位为 req/s，表示模型调用层面的请求到达率。若业务侧提供的是用户请求 QPS，而单个用户请求会触发多次模型调用，则应先折算为等效模型调用 QPS，再进入后续测算。
+
+当前实现支持两种 QPS 输入方式：
+
+1. **直接输入峰值 QPS**
+   业务侧直接提供 sizing 使用的峰值请求率 $\lambda_{peak}$。
+
+2. **Poisson 日均反推峰值 QPS**
+   当业务侧只有日均调用量 $Req_{day}$ 时，先折算平均 QPS：
+
+   $$
+   \lambda_{avg} = \frac{Req_{day}}{86400}
+   $$
+
+   若还需要体现日内高峰，可额外引入高峰放大系数 $\gamma_{burst} \ge 1$：
+
+   $$
+   \lambda_{base} = \lambda_{avg} \gamma_{burst}
+   $$
+
+   再选定统计时间窗 $\Delta t$ 和分位数 $q$，把该时间窗内的到达请求数近似为：
+
+   $$
+   N_{\Delta t} \sim Poisson(\lambda_{base}\Delta t)
+   $$
+
+   则 sizing 采用的峰值 QPS 定义为：
+
+   $$
+   \lambda_{peak} = \frac{Q_q\left(Poisson(\lambda_{base}\Delta t)\right)}{\Delta t}
+   $$
+
+   该模式适合“只有日调用量、缺少秒级峰值监控”的场景。它本质上是采购前的保守近似，而不是对真实突发流量分布的严格拟合。
 
 ### 3.2 请求长度画像
 
@@ -163,29 +268,46 @@ $$
 
 ### 3.6 当前实现的口径选择
 
-当前实现已收敛为单一 sizing 主口径：
+当前实现已支持两组可切换口径：
 
-- **峰值请求率** $\lambda_{peak}$；
-- **P95 输入 / 输出长度** $S_{in,p95}, S_{out,p95}$；
-- **P95 时延目标** $TTFT_{p95}^{target}, E2E_{p95}^{target}$。
+- **QPS 建模方式**
+  - 直接输入峰值请求率 $\lambda_{peak}$；
+  - 或由日调用量通过 Poisson 分位数反推得到 $\lambda_{peak}$。
 
-因此，当前代码中的显存约束、吞吐约束与时延必要条件，均以**峰值流量 + P95 长度 / 时延**为准，不再要求单独输入平均值。
+- **峰值在途建模方式**
+  - 使用 Little 定律式近似：
+
+    $$
+    C_{peak}^{budget} = \lambda_{peak} E2E_{p95}^{target} \cdot \rho_{safe}
+    $$
+
+  - 或直接输入峰值在途请求量 $C_{peak}^{input}$，并令：
+
+    $$
+    C_{peak}^{budget} = C_{peak}^{input}
+    $$
+
+- **长度与时延口径**：**P95 输入 / 输出长度** $S_{in,p95}, S_{out,p95}$，以及 **P95 时延目标** $TTFT_{p95}^{target}, E2E_{p95}^{target}$。
+
+因此，当前代码中的吞吐约束始终以**解析后的峰值 QPS + P95 长度**为准；显存约束则以**解析后的峰值在途预算 + P95 总长度**为准。
+
+默认兼容模式仍为：
+
+- 直接输入峰值 QPS；
+- Little 定律近似峰值在途；
+- P95 输入 / 输出长度与 P95 时延目标。
 
 ### 3.7 合法性校验
 
 进入正式计算前，至少检查：
 
-- $\lambda_{peak} \ge \lambda_{avg} > 0$；
-- $TTFT_{avg}^{target} > 0$，且 $TTFT_{p95}^{target} \ge TTFT_{avg}^{target}$；
-- $E2E_{avg}^{target} > TTFT_{avg}^{target}$；
+- 解析后的 $\lambda_{peak} > 0$；
+- 若采用 Poisson QPS 模式，则 $Req_{day} > 0$、$\gamma_{burst} \ge 1$、$\Delta t > 0$、$0 < q < 1$；
+- $TTFT_{p95}^{target} > 0$；
 - $E2E_{p95}^{target} > TTFT_{p95}^{target}$；
+- 若采用直接峰值在途模式，则 $C_{peak}^{input} > 0$；
+- 若采用 Little 定律近似，则安全系数 $\rho_{safe} \ge 1$；
 - 所有效率系数位于 $(0,1]$ 内。
-
-并定义 Decode 的时间预算：
-
-$$
-T_{dec,avg} = E2E_{avg}^{target} - TTFT_{avg}^{target}
-$$
 
 $$
 T_{dec,p95} = E2E_{p95}^{target} - TTFT_{p95}^{target}
@@ -232,19 +354,35 @@ $$
 
 ### 4.3 峰值活跃请求预算
 
-为估算峰值时刻系统需要同时容纳的活跃请求数，可采用 Little 定律式近似：
+当前实现支持两种峰值活跃请求预算输入方式。
+
+#### 4.3.1 Little 定律近似
+
+当只有峰值 QPS 与时延预算时，可采用 Little 定律式近似：
 
 $$
-C_{avg}^{budget} = \lambda_{avg} E2E_{avg}^{target}
-$$
-
-$$
-C_{peak}^{budget} = \lambda_{peak} E2E_{p95}^{target}
+C_{peak}^{budget} = \lambda_{peak} E2E_{p95}^{target} \cdot \rho_{safe}
 $$
 
 其中，$C_{peak}^{budget}$ 是显存估算中的核心保守量，因为 KV cache 与活跃序列数直接相关。
 
 该预算是采购前粗粒度估算，不是严格的排队分布结论。若系统存在明显排队、长尾混跑或突发流量尖峰，应再乘上额外安全系数。它也更适合被理解为“采购前保守在途预算上界”，而非线上真实瞬时并发分布的精确预测。
+
+#### 4.3.2 直接输入峰值在途请求量
+
+若业务侧已经有更直接的监控或仿真结果，例如：
+
+- 峰时实际在途请求量分位数；
+- 网关 / 调度器统计得到的最大活跃会话数；
+- 根据历史 trace 或离线回放得到的并发分布；
+
+则可以直接输入：
+
+$$
+C_{peak}^{budget} = C_{peak}^{input}
+$$
+
+该模式更贴近显存问题本身，因为显存主要由“同时挂着多少条请求”决定，而不是由平均到达率本身决定。
 
 ---
 

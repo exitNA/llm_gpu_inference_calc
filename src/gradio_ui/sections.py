@@ -23,11 +23,18 @@ class SidebarComponents:
     model_dropdown: Any
     precision_dropdown: Any
     gpu_preset_key: Any
+    qps_estimation_mode: Any
     lambda_peak_qps: Any
+    daily_request_count: Any
+    qps_burst_factor_pct: Any
+    poisson_time_window_sec: Any
+    poisson_qps_quantile_pct: Any
     p95_input_tokens: Any
     p95_output_tokens: Any
     ttft_p95_sec: Any
     e2e_p95_sec: Any
+    concurrency_estimation_mode: Any
+    direct_peak_concurrency: Any
     concurrency_safety_factor_pct: Any
     weight_overhead_ratio: Any
     runtime_overhead_ratio: Any
@@ -114,14 +121,60 @@ def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
                     build_config_section_header_html(
                         "🚦",
                         "业务目标",
-                        "界面已省略统计口径前缀；当前 sizing 默认按保守口径解释输入。",
+                        "支持直接峰值 QPS、泊松日均反推 QPS，以及 Little/直接在途两种显存口径。",
                     )
+                )
+                qps_estimation_mode = gr.Radio(
+                    label="QPS 建模方式",
+                    choices=[
+                        ("直接输入峰值 QPS", "direct_peak_qps"),
+                        ("泊松日均反推峰值 QPS", "poisson_from_daily_requests"),
+                    ],
+                    value=defaults.qps_estimation_mode,
+                    elem_classes=["compact-radio"],
                 )
                 with gr.Row(elem_classes=["config-field-grid"]):
                     lambda_peak_qps = gr.Number(
-                        label="QPS",
+                        label="峰值 QPS",
                         value=defaults.lambda_peak_qps,
                         precision=2,
+                    )
+                    daily_request_count = gr.Number(
+                        label="日调用量",
+                        value=defaults.daily_request_count,
+                        precision=0,
+                    )
+                with gr.Row(elem_classes=["config-field-grid"]):
+                    qps_burst_factor_pct = gr.Number(
+                        label="QPS 高峰放大系数 (%)",
+                        value=defaults.qps_burst_factor_pct,
+                        precision=0,
+                    )
+                    poisson_time_window_sec = gr.Number(
+                        label="Poisson 时间窗 (s)",
+                        value=defaults.poisson_time_window_sec,
+                        precision=2,
+                    )
+                with gr.Row(elem_classes=["config-field-grid"]):
+                    poisson_qps_quantile_pct = gr.Number(
+                        label="Poisson 分位数 (%)",
+                        value=defaults.poisson_qps_quantile_pct,
+                        precision=0,
+                    )
+                    concurrency_estimation_mode = gr.Radio(
+                        label="在途建模方式",
+                        choices=[
+                            ("Little 定律近似", "little_law"),
+                            ("直接输入峰值在途", "direct_peak_concurrency"),
+                        ],
+                        value=defaults.concurrency_estimation_mode,
+                        elem_classes=["compact-radio"],
+                    )
+                with gr.Row(elem_classes=["config-field-grid"]):
+                    direct_peak_concurrency = gr.Number(
+                        label="峰值在途请求量",
+                        value=defaults.direct_peak_concurrency,
+                        precision=0,
                     )
                     concurrency_safety_factor_pct = gr.Number(
                         label="在途安全系数 (%)",
@@ -158,11 +211,18 @@ def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
         model_dropdown=model_dropdown,
         precision_dropdown=precision_dropdown,
         gpu_preset_key=gpu_preset_key,
+        qps_estimation_mode=qps_estimation_mode,
         lambda_peak_qps=lambda_peak_qps,
+        daily_request_count=daily_request_count,
+        qps_burst_factor_pct=qps_burst_factor_pct,
+        poisson_time_window_sec=poisson_time_window_sec,
+        poisson_qps_quantile_pct=poisson_qps_quantile_pct,
         p95_input_tokens=p95_input_tokens,
         p95_output_tokens=p95_output_tokens,
         ttft_p95_sec=ttft_p95_sec,
         e2e_p95_sec=e2e_p95_sec,
+        concurrency_estimation_mode=concurrency_estimation_mode,
+        direct_peak_concurrency=direct_peak_concurrency,
         concurrency_safety_factor_pct=concurrency_safety_factor_pct,
         weight_overhead_ratio=weight_overhead_ratio,
         runtime_overhead_ratio=runtime_overhead_ratio,
