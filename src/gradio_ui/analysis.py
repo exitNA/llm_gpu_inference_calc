@@ -3,7 +3,7 @@ from __future__ import annotations
 import sys
 from typing import Any
 
-from gpu_sizing_core.service import evaluate_single_model, format_result_text
+from gpu_sizing_core.service import evaluate_single_model
 from ui.views import (
     build_final_summary_html,
     build_kv_detail_rows,
@@ -36,12 +36,6 @@ def build_default_result(*, emit_console_trace: bool = True) -> dict[str, Any]:
     if emit_console_trace:
         _print_console_calc_trace("default-result", result)
     return result
-
-
-def build_default_result_text() -> str:
-    return format_result_text(build_default_result(emit_console_trace=False))
-
-
 def run_analysis(
     *raw_inputs: Any,
 ) -> tuple[str, str, str, str, list[list[str]], list[list[str]], str, dict[str, Any]]:

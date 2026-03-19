@@ -25,12 +25,6 @@ def fmt_compact(value: Any, digits: int = 1) -> str:
         if abs(amount) >= threshold:
             return f"{amount / threshold:.{digits}f}{suffix}"
     return f"{amount:.{digits}f}".rstrip("0").rstrip(".")
-
-
-def get_dominant_constraints(result: dict[str, Any]) -> list[str]:
-    return list(result.get("dominant_constraints", [])) or ["显存"]
-
-
 _MATH_REPLACEMENTS: list[tuple[str, str]] = [
     ("TPS_pre,target^peak", '<span class="math-inline">TPS<sub>pre</sub></span>'),
     ("TPS_dec,target^peak", '<span class="math-inline">TPS<sub>dec</sub></span>'),
@@ -149,25 +143,4 @@ def render_calc_accordion(title: str, section: dict[str, Any] | None) -> str:
         </div>
       </details>
     </div>
-    """
-
-
-def render_calc_panel(section: dict[str, Any], idx: int) -> str:
-    step_cards = render_calc_section_steps(section)
-    summary_html = ""
-    if section.get("summary"):
-        summary_html = f'<p class="calc-section-summary">{render_math_text(section["summary"])}</p>'
-    return f"""
-    <section class="calc-section-card">
-      <div class="calc-section-header">
-        <span class="calc-section-index">{idx:02d}</span>
-        <div class="calc-section-copy">
-          <h3>{escape(section["title"])}</h3>
-          {summary_html}
-        </div>
-      </div>
-      <div class="calc-step-list">
-        {step_cards}
-      </div>
-    </section>
     """

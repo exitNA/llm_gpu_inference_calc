@@ -8,8 +8,32 @@ from .sections import ResultComponents, SidebarComponents
 
 
 def bind_events(*, sidebar: SidebarComponents, results: ResultComponents, demo: Any) -> None:
-    inputs = sidebar.analysis_inputs()
-    outputs = results.analysis_outputs()
+    inputs = [
+        sidebar.model_dropdown,
+        sidebar.precision_dropdown,
+        sidebar.gpu_preset_key,
+        sidebar.lambda_peak_qps,
+        sidebar.p95_input_tokens,
+        sidebar.p95_output_tokens,
+        sidebar.ttft_p95_sec,
+        sidebar.e2e_p95_sec,
+        sidebar.concurrency_safety_factor_pct,
+        sidebar.weight_overhead_ratio,
+        sidebar.runtime_overhead_ratio,
+        sidebar.usable_vram_ratio,
+        sidebar.bandwidth_efficiency,
+        sidebar.compute_efficiency,
+    ]
+    outputs = [
+        results.overview_html,
+        results.memory_html,
+        results.throughput_html,
+        results.final_html,
+        results.request_table,
+        results.kv_table,
+        results.calc_text,
+        results.raw_json,
+    ]
 
     def run_analysis_safe(*values: Any):
         try:

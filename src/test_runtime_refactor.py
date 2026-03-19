@@ -1,11 +1,11 @@
 from gradio_ui.analysis import build_default_result
-from gradio_ui.config import build_default_configs
+from gradio_ui.config import UIInputs
 from gpu_sizing_core import GPUConfig, ModelConfig, RuntimeConfig, TrafficConfig
 
 try:
-    model, traffic, gpu, runtime = build_default_configs()
+    model, traffic, gpu, runtime = UIInputs.default().build_configs()
     print(
-        "build_default_configs() returned:",
+        "UIInputs.default().build_configs() returned:",
         type(model),
         type(traffic),
         type(gpu),

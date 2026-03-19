@@ -36,24 +36,6 @@ class SidebarComponents:
     compute_efficiency: Any
     reset_button: Any
 
-    def analysis_inputs(self) -> list[Any]:
-        return [
-            self.model_dropdown,
-            self.precision_dropdown,
-            self.gpu_preset_key,
-            self.lambda_peak_qps,
-            self.p95_input_tokens,
-            self.p95_output_tokens,
-            self.ttft_p95_sec,
-            self.e2e_p95_sec,
-            self.concurrency_safety_factor_pct,
-            self.weight_overhead_ratio,
-            self.runtime_overhead_ratio,
-            self.usable_vram_ratio,
-            self.bandwidth_efficiency,
-            self.compute_efficiency,
-        ]
-
 
 @dataclass(frozen=True)
 class ResultComponents:
@@ -65,18 +47,6 @@ class ResultComponents:
     kv_table: Any
     calc_text: Any
     raw_json: Any
-
-    def analysis_outputs(self) -> list[Any]:
-        return [
-            self.overview_html,
-            self.memory_html,
-            self.throughput_html,
-            self.final_html,
-            self.request_table,
-            self.kv_table,
-            self.calc_text,
-            self.raw_json,
-        ]
 
 
 def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:

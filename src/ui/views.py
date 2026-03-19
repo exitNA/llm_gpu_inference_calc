@@ -3,16 +3,11 @@ from __future__ import annotations
 from html import escape
 from typing import Any
 
-from presets import get_gpu_preset, get_model_preset
-
 from .common import (
-    APP_CSS,
     fmt_compact,
     fmt_value,
-    get_dominant_constraints,
     render_calc_accordion,
     render_math_text,
-    render_calc_panel,
 )
 
 def build_request_detail_rows(result: dict[str, Any]) -> list[list[str]]:
@@ -45,43 +40,9 @@ def build_kv_detail_rows(result: dict[str, Any]) -> list[list[str]]:
         )
     return rows
 
-
-def build_traffic_profile_header_html() -> str:
-    return """
-    <div class="selection-card">
-      <p class="selection-eyebrow">business inputs</p>
-      <p class="selection-copy">
-        界面已省略统计口径前缀；当前 sizing 默认按保守口径解释这些业务输入。
-      </p>
-    </div>
-    """
-
-
-def build_shape_name_html(name: str) -> str:
-    return f'<div class="selection-card" style="margin-top:6px"><strong>{escape(name)}</strong></div>'
-
-
-def build_calculation_process_html(result: dict[str, Any]) -> str:
-    sections = result.get("calculation_process_sections", [])
-    cards = [render_calc_panel(section, idx) for idx, section in enumerate(sections, start=1)]
-    return f"""
-    <div class="calc-process-shell">
-      <div class="calc-process-hero">
-        <div>
-          <p class="calc-process-eyebrow">Calculation Detail View</p>
-          <h2>计算细节总览</h2>
-        </div>
-        <p class="calc-process-copy">每一步先看结论，再看公式与代入过程，便于人工快速复核。</p>
-      </div>
-      <div class="calc-process-grid">
-        {''.join(cards)}
-      </div>
-    </div>
-    """
-
-
 def build_overview_html(result: dict[str, Any]) -> str:
-    dominant = " · ".join(get_dominant_constraints(result))
+    dominant_constraints = list(result.get("dominant_constraints", [])) or ["显存"]
+    dominant = " · ".join(dominant_constraints)
     traffic = result["traffic_config"]
     gpu = result["gpu_config"]
     runtime = result["runtime_config"]
@@ -170,7 +131,6 @@ def build_overview_html(result: dict[str, Any]) -> str:
 
 
 def build_memory_analysis_html(result: dict[str, Any]) -> str:
-    gpu = result["gpu_config"]
     peak_cache_gb = max(result["memory_for_sizing_gb"] - result["weight_with_overhead_gb"] - result["runtime_overhead_gb"], 0.0)
     calc_sections = result.get("calculation_process_sections", [])
     section_html = render_calc_accordion("显存约束计算细节", calc_sections[1] if len(calc_sections) > 1 else None)
@@ -280,7 +240,8 @@ def build_throughput_analysis_html(result: dict[str, Any]) -> str:
 
 
 def build_final_summary_html(result: dict[str, Any]) -> str:
-    dominant = " · ".join(get_dominant_constraints(result))
+    dominant_constraints = list(result.get("dominant_constraints", [])) or ["显存"]
+    dominant = " · ".join(dominant_constraints)
     calc_sections = result.get("calculation_process_sections", [])
     section_html = render_calc_accordion("最终卡数与能力回推细节", calc_sections[3] if len(calc_sections) > 3 else None)
     cost_html = ""
@@ -322,35 +283,5 @@ def build_final_summary_html(result: dict[str, Any]) -> str:
         {cost_html}
       </div>
       {section_html}
-    </div>
-    """
-
-
-def build_model_preset_html(preset_key: str) -> str:
-    preset = get_model_preset(preset_key)
-    cfg = preset.config
-    return f"""
-    <div class="selection-card">
-      <p class="selection-eyebrow">model preset</p>
-      <div class="metric-stack">
-        <div class="metric-line"><span>模型名称</span><strong>{escape(cfg.model_name)}</strong></div>
-        <div class="metric-line"><span>总参数量</span><strong>{cfg.num_params_billion:.1f}B</strong></div>
-        <div class="metric-line"><span>层数</span><strong>{cfg.num_layers}</strong></div>
-      </div>
-    </div>
-    """
-
-
-def build_gpu_preset_html(preset_key: str) -> str:
-    preset = get_gpu_preset(preset_key)
-    cfg = preset.config
-    return f"""
-    <div class="selection-card">
-      <p class="selection-eyebrow">gpu preset</p>
-      <div class="metric-stack">
-        <div class="metric-line"><span>显卡名称</span><strong>{escape(cfg.gpu_name)}</strong></div>
-        <div class="metric-line"><span>显存容量</span><strong>{cfg.vram_gb:.0f} GB</strong></div>
-        <div class="metric-line"><span>显存带宽</span><strong>{fmt_value(cfg.memory_bandwidth_gb_per_sec, 0, ' GB/s')}</strong></div>
-      </div>
     </div>
     """

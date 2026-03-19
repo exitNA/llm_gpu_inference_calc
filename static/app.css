@@ -928,102 +928,6 @@
   color: var(--c-text-secondary);
 }
 
-/* ═══ Misc ═══ */
-.selection-card {
-  padding: 8px 10px;
-  border-radius: 6px;
-  border: 1px solid var(--c-border);
-  background: var(--c-bg);
-}
-
-.selection-eyebrow {
-  margin: 0 0 2px;
-  font-size: 9px;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-  color: var(--c-text-tertiary);
-  font-weight: 600;
-}
-
-.selection-copy {
-  margin: 2px 0 0;
-  color: var(--c-text-secondary);
-  font-size: 11px;
-  line-height: 1.4;
-}
-
-.metric-line {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 8px;
-  font-size: 12px;
-  color: var(--c-text-secondary);
-  padding: 3px 0;
-  border-bottom: 1px solid var(--c-border-light);
-}
-
-.metric-line:last-child {
-  border-bottom: none;
-}
-
-.metric-line strong {
-  color: var(--c-text-primary);
-  font-weight: 600;
-  font-family: var(--font-mono);
-  font-size: 11px;
-}
-
-/* ═══ Calculation Process ═══ */
-.calc-process-shell {
-  display: flex;
-  flex-direction: column;
-  gap: 16px;
-}
-
-.calc-process-hero {
-  display: flex;
-  justify-content: space-between;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 18px 20px;
-  border-radius: 20px;
-  border: 1px solid var(--c-border);
-  background:
-    linear-gradient(135deg, rgba(79, 70, 229, 0.07), rgba(255, 255, 255, 0.96)),
-    var(--c-surface);
-}
-
-.calc-process-eyebrow {
-  margin: 0 0 4px;
-  font-size: 10px;
-  letter-spacing: 0.12em;
-  text-transform: uppercase;
-  color: var(--c-accent);
-  font-weight: 700;
-}
-
-.calc-process-hero h2 {
-  margin: 0;
-  font-size: 24px;
-  line-height: 1.05;
-  letter-spacing: -0.03em;
-  color: var(--c-text-primary);
-}
-
-.calc-process-copy {
-  margin: 0;
-  max-width: 420px;
-  font-size: 13px;
-  line-height: 1.55;
-  color: var(--c-text-secondary);
-}
-
-.calc-process-grid {
-  display: grid;
-  grid-template-columns: 1fr;
-  gap: 14px;
-}
-
 .calc-step-list {
   display: flex;
   flex-direction: column;
@@ -1291,14 +1195,6 @@
 }
 
 @media (max-width: 900px) {
-  .calc-process-hero {
-    flex-direction: column;
-  }
-
-  .calc-process-copy {
-    max-width: none;
-  }
-
   .calc-step-derivation,
   .calc-step-note {
     padding-left: 0;
