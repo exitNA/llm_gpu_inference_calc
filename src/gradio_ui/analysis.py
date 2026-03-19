@@ -18,7 +18,7 @@ from .config import UIInputs
 
 def _print_console_calc_trace(context: str, result: dict[str, Any]) -> None:
     print(
-        f"[calc-trace] {context}: {result['model_name']} | G_req={result['business_gpu_count']} | 主导约束={' / '.join(result['dominant_constraints'])}",
+        f"\n---\n[calc-trace] {result['model_name']} | {result['gpu_name']} | {result['business_gpu_count']} 卡",
         file=sys.stderr,
         flush=True,
     )

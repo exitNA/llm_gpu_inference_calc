@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from math import ceil, floor
 
-from .constants import PRECISION_BYTES
+from .constants import BYTES_PER_GIB, BYTES_PER_KIB, BYTES_PER_MIB, BYTES_PER_VENDOR_VRAM_GB, PRECISION_BYTES
 
 FORMULA_TERM_LABELS: list[tuple[str, str]] = [
     ("TPS_pre,target^peak", "峰值 Prefill 工作量"),
@@ -75,12 +75,12 @@ def format_calc_number(value: float | int | None, digits: int = 4) -> str:
     return f"{rounded:,.{digits}f}".rstrip("0").rstrip(".")
 
 
-def bytes_to_gb(num_bytes: float) -> float:
-    return num_bytes / 1e9
+def bytes_to_gib(num_bytes: float) -> float:
+    return num_bytes / BYTES_PER_GIB
 
 
-def gb_to_bytes(num_gb: float) -> float:
-    return num_gb * 1e9
+def vendor_vram_gb_to_bytes(num_gb: float) -> float:
+    return num_gb * BYTES_PER_VENDOR_VRAM_GB
 
 
 def ceil_div(a: float, b: float) -> int:
@@ -108,12 +108,12 @@ def divide_optional(value: float, divisor: float | None) -> float | None:
 def format_adaptive_memory(bytes_val: float | None, digits: int = 2) -> str:
     if bytes_val is None:
         return "-"
-    if bytes_val >= 1e9:
-        return f"{format_calc_number(bytes_val / 1e9, digits)} GB"
-    if bytes_val >= 1e6:
-        return f"{format_calc_number(bytes_val / 1e6, digits)} MB"
-    if bytes_val >= 1e3:
-        return f"{format_calc_number(bytes_val / 1e3, digits)} KB"
+    if bytes_val >= BYTES_PER_GIB:
+        return f"{format_calc_number(bytes_val / BYTES_PER_GIB, digits)} GiB"
+    if bytes_val >= BYTES_PER_MIB:
+        return f"{format_calc_number(bytes_val / BYTES_PER_MIB, digits)} MiB"
+    if bytes_val >= BYTES_PER_KIB:
+        return f"{format_calc_number(bytes_val / BYTES_PER_KIB, digits)} KiB"
     return f"{format_calc_number(bytes_val, 0)} bytes"
 
 

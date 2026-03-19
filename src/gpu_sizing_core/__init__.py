@@ -17,7 +17,7 @@ from .calculations import (
 from .constants import PRECISION_BYTES, SECONDS_PER_DAY
 from .helpers import (
     build_calc_step,
-    bytes_to_gb,
+    bytes_to_gib,
     ceil_div,
     divide_optional,
     floor_div,
@@ -27,10 +27,10 @@ from .helpers import (
     format_calc_number,
     format_ratio_percent,
     humanize_formula,
-    gb_to_bytes,
     multiply_optional,
     precision_to_bytes,
     round_optional,
+    vendor_vram_gb_to_bytes,
 )
 from .models import GPUConfig, ModelConfig, RuntimeConfig, TrafficConfig
 from .process import build_calculation_process_sections, format_calculation_process_text
@@ -46,7 +46,7 @@ __all__ = [
     "SECONDS_PER_DAY",
     "build_calc_step",
     "build_calculation_process_sections",
-    "bytes_to_gb",
+    "bytes_to_gib",
     "ceil_div",
     "determine_dominant_constraints",
     "divide_optional",
@@ -71,7 +71,6 @@ __all__ = [
     "format_ratio_percent",
     "humanize_formula",
     "format_result_text",
-    "gb_to_bytes",
     "get_peak_compute_tflops",
     "multiply_optional",
     "precision_to_bytes",
@@ -79,4 +78,5 @@ __all__ = [
     "round_optional",
     "validate_runtime_config",
     "validate_traffic_config",
+    "vendor_vram_gb_to_bytes",
 ]

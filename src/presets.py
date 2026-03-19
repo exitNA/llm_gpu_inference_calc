@@ -39,10 +39,10 @@ for _stem, _cfg in load_all_gpu_configs().items():
 DEFAULT_BUSINESS_PROFILE = BusinessProfile(
     name="标准在线推理",
     lambda_peak_qps=5,
-    p95_input_tokens=20000,
-    p95_output_tokens=10000,
-    ttft_p95_sec=5,
-    e2e_p95_sec=60,
+    p95_input_tokens=3000,
+    p95_output_tokens=1000,
+    ttft_p95_sec=3,
+    e2e_p95_sec=120,
     concurrency_safety_factor=1.1,
     note="默认画像使用峰值 QPS 与 P95 输入输出长度、P95 时延目标作为 sizing 主口径。",
 )

@@ -10,7 +10,7 @@ from .calculations import (
     estimate_request_stats,
     estimate_throughput_based_gpu_count,
 )
-from .helpers import bytes_to_gb, format_adaptive_token_volume, format_calc_number, round_optional
+from .helpers import bytes_to_gib, format_adaptive_token_volume, format_calc_number, round_optional
 from .models import GPUConfig, ModelConfig, RuntimeConfig, TrafficConfig
 from .process import build_calculation_process_sections, format_calculation_process_text
 from .validation import validate_runtime_config, validate_traffic_config
@@ -71,12 +71,12 @@ def evaluate_single_model(
         **memory_info,
         **throughput_info,
         **capacity_info,
-        "weight_with_overhead_gb": round(bytes_to_gb(float(memory_info["weight_bytes"])), 2),
-        "runtime_overhead_gb": round(bytes_to_gb(float(memory_info["runtime_fixed_bytes"])), 2),
-        "p95_kv_gb_per_request": round(bytes_to_gb(float(memory_info["p95_cache_bytes_per_request"])), 2),
-        "p95_total_memory_gb": round(bytes_to_gb(float(memory_info["total_memory_bytes"])), 2),
-        "usable_vram_gb_per_gpu": round(bytes_to_gb(float(memory_info["usable_vram_bytes_per_gpu"])), 2),
-        "memory_for_sizing_gb": round(bytes_to_gb(float(memory_info["total_memory_bytes"])), 2),
+        "weight_with_overhead_gib": round(bytes_to_gib(float(memory_info["weight_bytes"])), 2),
+        "runtime_overhead_gib": round(bytes_to_gib(float(memory_info["runtime_fixed_bytes"])), 2),
+        "p95_kv_gib_per_request": round(bytes_to_gib(float(memory_info["p95_cache_bytes_per_request"])), 2),
+        "p95_total_memory_gib": round(bytes_to_gib(float(memory_info["total_memory_bytes"])), 2),
+        "usable_vram_gib_per_gpu": round(bytes_to_gib(float(memory_info["usable_vram_bytes_per_gpu"])), 2),
+        "memory_for_sizing_gib": round(bytes_to_gib(float(memory_info["total_memory_bytes"])), 2),
         "memory_sizing_basis": "peak_qps_plus_p95_length",
         "daily_decode_token_capacity": round_optional(capacity_info["daily_decode_token_capacity_p95"], 1),
         "daily_prefill_token_capacity": round_optional(capacity_info["daily_prefill_token_capacity_p95"], 1),
@@ -106,7 +106,7 @@ def evaluate_single_model(
         {
             "name": "P95长度",
             "seq_len_total": traffic.p95_total_tokens,
-            "kv_cache_gb_per_request": result["p95_kv_gb_per_request"],
+            "kv_cache_gib_per_request": result["p95_kv_gib_per_request"],
             "max_concurrency_by_memory": capacity_info["max_concurrency_by_memory_p95"],
         },
     ]

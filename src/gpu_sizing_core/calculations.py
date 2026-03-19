@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from .constants import SECONDS_PER_DAY
-from .helpers import ceil_div, divide_optional, floor_div, gb_to_bytes, multiply_optional, precision_to_bytes
+from .helpers import ceil_div, divide_optional, floor_div, multiply_optional, precision_to_bytes, vendor_vram_gb_to_bytes
 from .models import GPUConfig, ModelConfig, RuntimeConfig, TrafficConfig
 
 
@@ -136,7 +136,7 @@ def estimate_memory_based_gpu_count(
     cache_info = estimate_cache_memory(model, traffic, runtime, workload_info["c_peak_budget"])
 
     total_memory_bytes = weight_info["weight_bytes"] + weight_info["runtime_fixed_bytes"] + cache_info["cache_total_peak_bytes"]
-    usable_vram_bytes_per_gpu = gb_to_bytes(gpu.vram_gb) * runtime.usable_vram_ratio
+    usable_vram_bytes_per_gpu = vendor_vram_gb_to_bytes(gpu.vram_gb) * runtime.usable_vram_ratio
     gpu_count_by_memory = ceil_div(total_memory_bytes, usable_vram_bytes_per_gpu)
 
     return {

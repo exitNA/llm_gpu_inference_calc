@@ -44,8 +44,8 @@ class UIInputs:
             e2e_p95_sec=profile.e2e_p95_sec,
             concurrency_safety_factor_pct=int(profile.concurrency_safety_factor * 100),
             weight_overhead_ratio=15,
-            runtime_overhead_ratio=8,
-            usable_vram_ratio=90,
+            runtime_overhead_ratio=5,
+            usable_vram_ratio=95,
             bandwidth_efficiency=65,
             compute_efficiency=60,
         )

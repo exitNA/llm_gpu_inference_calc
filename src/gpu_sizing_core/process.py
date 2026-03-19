@@ -65,7 +65,7 @@ def build_calculation_process_sections(result: dict[str, Any]) -> list[dict[str,
                 build_calc_step("运行时固定显存 Mr", "Mr = α_r × Mw", f"{format_calc_number(runtime.runtime_overhead_ratio, 2)} × {format_adaptive_memory(result['weight_bytes'])}", format_adaptive_memory(result["runtime_fixed_bytes"])),
                 build_calc_step("单请求 P95 Cache", "M_cache^req(S_p95) = L × S_p95 × 每 token 每层 cache 字节数", f"{model.num_layers} × {traffic.p95_total_tokens} × ({_describe_cache_formula(model, runtime)})", format_adaptive_memory(result["p95_cache_bytes_per_request"])),
                 build_calc_step("总 Cache 显存", "M_cache = C_peak^budget × M_cache^req(S_p95)", f"{format_calc_number(result['c_peak_budget'])} × {format_adaptive_memory(result['p95_cache_bytes_per_request'])}", format_adaptive_memory(result["cache_total_peak_bytes"])),
-                build_calc_step("单卡有效显存", "V_gpu^eff = V_gpu × η_vram", f"{format_calc_number(gpu.vram_gb)} GB × {format_calc_number(runtime.usable_vram_ratio, 2)}", format_adaptive_memory(result["usable_vram_bytes_per_gpu"])),
+                build_calc_step("单卡有效显存", "V_gpu^eff = V_gpu × η_vram", f"{format_calc_number(gpu.vram_gb)} 厂商标称显存 GB × {format_calc_number(runtime.usable_vram_ratio, 2)}", format_adaptive_memory(result["usable_vram_bytes_per_gpu"]), note="当前实现将 GPU 标称显存 GB 按 1024^3 bytes 折算；展示结果统一使用 GiB。"),
                 build_calc_step("显存约束卡数 G_mem", "G_mem = ceil((Mw + Mr + M_cache) / (V_gpu × η_vram))", f"ceil({format_adaptive_memory(result['total_memory_bytes'])} / {format_adaptive_memory(result['usable_vram_bytes_per_gpu'])})", f"{result['gpu_count_by_memory']} 卡"),
             ],
         },
@@ -150,7 +150,7 @@ def _compact_formula(formula: str) -> str:
 
 
 def _strip_units(text: str) -> str:
-    stripped = re.sub(r"\s+(tok/s|req/s|req/day|ms/token|tokens|req|GB/s|TFLOPS|FLOPs|GB|MB|KB|s)\b", "", text)
+    stripped = re.sub(r"\s+(tok/s|req/s|req/day|ms/token|tokens|req|GB/s|TFLOPS|FLOPs|GiB|MiB|KiB|GB|MB|KB|s)\b", "", text)
     stripped = re.sub(r"\s+", " ", stripped).strip()
     return stripped
 
