@@ -14,7 +14,7 @@ from ui.views import (
 )
 
 from .constants import KV_TABLE_HEADERS, REQUEST_TABLE_HEADERS
-from .config import DefaultComponentValues
+from .config import UIInputs
 from .runtime import build_config_section_header_html
 
 
@@ -79,7 +79,7 @@ class ResultComponents:
         ]
 
 
-def build_sidebar(gr, defaults: DefaultComponentValues) -> SidebarComponents:
+def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
     with gr.Column(scale=4, min_width=420, elem_classes=["workspace-sidebar"]):
         with gr.Group(elem_classes=["config-panel"]):
             with gr.Group(elem_classes=["config-section", "config-section-model"]):

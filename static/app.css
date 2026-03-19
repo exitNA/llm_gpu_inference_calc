@@ -72,8 +72,8 @@
   -webkit-backdrop-filter: var(--glass-blur);
   border: 1px solid var(--glass-border);
   border-radius: var(--radius-lg);
-  padding: 28px;
-  margin-bottom: 24px;
+  padding: 20px 22px;
+  margin-bottom: 16px;
   box-shadow: var(--shadow-md);
   transition: var(--transition-smooth);
 }
@@ -87,7 +87,7 @@
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 18px;
+  margin-bottom: 12px;
 }
 
 .step-number {
@@ -152,10 +152,10 @@
   flex-direction: column;
   align-items: center;
   justify-content: center;
-  width: 110px;
-  height: 110px;
+  width: 92px;
+  height: 92px;
   background: white;
-  border-radius: 28px;
+  border-radius: 22px;
   box-shadow: var(--shadow-md), inset 0 0 0 1px rgba(0,0,0,0.03);
   position: relative;
   overflow: hidden;
@@ -171,7 +171,7 @@
 
 .hero-gpu-number {
   font-family: var(--font-mono);
-  font-size: 52px;
+  font-size: 42px;
   font-weight: 800;
   line-height: 1;
   color: var(--c-accent);
@@ -221,17 +221,17 @@
   display: flex;
   flex-wrap: wrap;
   gap: 8px;
-  margin-top: 10px;
+  margin-top: 6px;
 }
 
 .hero-strategy-tag {
   display: inline-flex;
   align-items: center;
-  padding: 4px 10px;
+  padding: 3px 8px;
   background: var(--c-bg);
   border: 1px solid var(--c-border);
   border-radius: 8px;
-  font-size: 11px;
+  font-size: 10px;
   font-weight: 600;
   color: var(--c-text-secondary);
 }
@@ -275,18 +275,18 @@
 .result-card-body-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 16px;
-  margin-top: 24px;
+  gap: 12px;
+  margin-top: 16px;
 }
 
 .result-group-card {
   background: white;
   border: 1px solid var(--c-border);
   border-radius: var(--radius-md);
-  padding: 20px;
+  padding: 14px;
   display: flex;
   flex-direction: column;
-  gap: 16px;
+  gap: 10px;
   transition: var(--transition-fast);
 }
 
@@ -305,7 +305,7 @@
   align-items: center;
   gap: 10px;
   border-bottom: 1px solid var(--c-border-light);
-  padding-bottom: 12px;
+  padding-bottom: 8px;
 }
 
 .group-icon {
@@ -323,7 +323,7 @@
 .result-item-row {
   display: grid;
   grid-template-columns: 48px 1fr;
-  gap: 12px;
+  gap: 10px;
   align-items: flex-start;
 }
 
@@ -342,7 +342,7 @@
 
 .result-item-value {
   font-family: var(--font-mono);
-  font-size: 20px;
+  font-size: 18px;
   font-weight: 800;
   color: var(--c-text-primary);
   line-height: 1.1;
@@ -350,7 +350,7 @@
 
 .result-item-value-compact {
   font-family: var(--font-mono);
-  font-size: 17px;
+  font-size: 16px;
   font-weight: 800;
   color: var(--c-text-primary);
   line-height: 1.3;
@@ -575,11 +575,11 @@
 .throughput-grid {
   display: grid;
   grid-template-columns: 1fr 1fr;
-  gap: 10px;
+  gap: 8px;
 }
 
 .tp-card {
-  padding: 14px;
+  padding: 12px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--c-border);
   background: var(--c-surface);
@@ -589,7 +589,7 @@
   display: flex;
   align-items: center;
   justify-content: space-between;
-  margin-bottom: 10px;
+  margin-bottom: 8px;
 }
 
 .tp-card-title {
@@ -624,7 +624,7 @@
 .tp-metric-stack {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .tp-metric-row {
@@ -632,7 +632,7 @@
   justify-content: space-between;
   align-items: center;
   font-size: 12px;
-  padding: 2px 0;
+  padding: 1px 0;
 }
 
 .tp-metric-label {
@@ -648,8 +648,8 @@
 }
 
 .tp-result {
-  margin-top: 10px;
-  padding: 8px 10px;
+  margin-top: 8px;
+  padding: 7px 9px;
   border-radius: 6px;
   background: var(--c-bg);
   border: 1px solid var(--c-border);
@@ -763,14 +763,14 @@
 .constraint-grid {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
-  gap: 10px;
-  margin-bottom: 16px;
+  gap: 8px;
+  margin-bottom: 10px;
 }
 
 .constraint-card {
   position: relative;
   text-align: center;
-  padding: 16px 12px;
+  padding: 12px 10px;
   border: 1px solid var(--c-border);
   border-radius: var(--radius-md);
   background: var(--c-surface);
@@ -805,17 +805,9 @@
   margin-bottom: 2px;
 }
 
-.constraint-symbol {
-  display: block;
-  font-size: 18px;
-  color: var(--c-text-secondary);
-  margin-bottom: 8px;
-  line-height: 1.1;
-}
-
 .constraint-value {
   display: inline-block;
-  font-size: 32px;
+  font-size: 28px;
   font-weight: 800;
   color: var(--c-text-primary);
   font-family: var(--font-mono);
@@ -838,8 +830,8 @@
   display: block;
   font-size: 12px;
   color: var(--c-text-tertiary);
-  margin-top: 8px;
-  line-height: 1.4;
+  margin-top: 6px;
+  line-height: 1.35;
 }
 
 /* Final formula: baseline + HA = total */
@@ -848,16 +840,16 @@
   align-items: center;
   justify-content: center;
   gap: 10px;
-  padding: 12px;
+  padding: 10px;
   background: var(--c-bg);
   border-radius: var(--radius-md);
-  margin-bottom: 12px;
+  margin-bottom: 10px;
   border: 1px solid var(--c-border);
 }
 
 .formula-term {
   text-align: center;
-  padding: 8px 16px;
+  padding: 4px 8px;
 }
 
 .formula-label {
@@ -870,7 +862,7 @@
 
 .formula-value {
   display: block;
-  font-size: 24px;
+  font-size: 22px;
   font-weight: 800;
   color: var(--c-text-primary);
   font-family: var(--font-mono);
@@ -883,13 +875,18 @@
 }
 
 .formula-result {
-  background: var(--c-accent-subtle);
-  border: 2px solid #bfdbfe;
+  background: transparent;
+  border: none;
   border-radius: var(--radius-md);
-  padding: 8px 20px;
+  padding: 0;
 }
 
-.formula-result .formula-value {
+.final-summary-card {
+  background: linear-gradient(135deg, #f8fbff, #eef5ff);
+  border-color: #dbeafe;
+}
+
+.final-summary-card .formula-value {
   color: var(--c-accent);
 }
 
@@ -900,7 +897,7 @@
 }
 
 .ha-detail-card {
-  padding: 10px;
+  padding: 8px 9px;
   border-radius: 6px;
   background: var(--c-bg);
   border: 1px solid var(--c-border);
@@ -918,7 +915,7 @@
 .ha-detail-value {
   display: block;
   margin-top: 3px;
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 700;
   color: var(--c-text-primary);
   font-family: var(--font-mono);
@@ -2218,7 +2215,7 @@
   display: flex;
   gap: 28px;
   align-items: center;
-  padding: 28px 32px;
+  padding: 20px 24px;
   background: linear-gradient(135deg, #ffffff 0%, #f1f5f9 100%);
   border-bottom: 1px solid var(--c-border);
   position: relative;

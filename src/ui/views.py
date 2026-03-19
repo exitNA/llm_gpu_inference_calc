@@ -15,21 +15,6 @@ from .common import (
     render_calc_panel,
 )
 
-
-G_REQ_HTML = '<span class="math-inline">G<sub>req</sub></span>'
-G_MEM_HTML = '<span class="math-inline">G<sub>mem</sub></span>'
-G_PRE_HTML = '<span class="math-inline">G<sub>pre</sub></span>'
-G_DEC_HTML = '<span class="math-inline">G<sub>dec</sub></span>'
-M_W_HTML = '<span class="math-inline">M<sub>w</sub></span>'
-M_R_HTML = '<span class="math-inline">M<sub>r</sub></span>'
-M_CACHE_HTML = '<span class="math-inline">M<sub>cache</sub></span>'
-C_PEAK_HTML = '<span class="math-inline">C<sub>peak</sub></span>'
-M_REQ_P95_HTML = '<span class="math-inline">M<sub>req</sub>(P95)</span>'
-ETA_VRAM_HTML = '<span class="math-inline">&eta;<sub>vram</sub></span>'
-RHO_P95_HTML = '<span class="math-inline">&rho;<sub>p95</sub></span>'
-LAMBDA_SUS_HTML = '<span class="math-inline">&lambda;<sub>sus</sub></span>'
-
-
 def build_request_detail_rows(result: dict[str, Any]) -> list[list[str]]:
     rows = []
     for item in result.get("request_profile_rows", []):
@@ -102,7 +87,6 @@ def build_overview_html(result: dict[str, Any]) -> str:
     runtime = result["runtime_config"]
     calc_sections = result.get("calculation_process_sections", [])
     section_html = render_calc_accordion("业务目标折算与输入口径", calc_sections[0] if len(calc_sections) > 0 else None)
-    req_formula_html = render_math_text("G_req = max(G_mem, G_pre, G_dec)")
     return f"""
     <div class="result-card-unified">
       <div class="result-card-header">
@@ -114,7 +98,7 @@ def build_overview_html(result: dict[str, Any]) -> str:
           <div class="hero-model-name-large">{escape(result['model_name'])}</div>
           <div class="hero-tag-row">
             <span class="hero-constraint constraint-throughput">{escape(dominant)}</span>
-            <span class="hero-strategy-tag">{req_formula_html}</span>
+            <span class="hero-strategy-tag">显存、输入吞吐、输出吞吐三类约束取最大值</span>
           </div>
         </div>
       </div>
@@ -168,7 +152,7 @@ def build_overview_html(result: dict[str, Any]) -> str:
             <span class="result-item-label">主结果</span>
             <div class="result-item-content">
               <span class="result-item-value-compact">{result['business_gpu_count']} GPUs</span>
-              <span class="result-item-sub">{G_REQ_HTML} 对应的最小卡数下界</span>
+              <span class="result-item-sub">建议采购卡数下界</span>
             </div>
           </div>
           <div class="result-item-row">
@@ -202,24 +186,21 @@ def build_memory_analysis_html(result: dict[str, Any]) -> str:
       <div class="constraint-grid">
         <div class="constraint-card constraint-winner">
           <span class="constraint-title">权重显存</span>
-          <span class="constraint-symbol">{M_W_HTML}</span>
           <span class="constraint-value">{result['weight_with_overhead_gb']:.1f}</span>
           <span class="constraint-unit">GB</span>
-          <span class="constraint-reason">含 &alpha;<sub>w</sub> 后的模型权重显存</span>
+          <span class="constraint-reason">模型加载后的权重占用</span>
         </div>
         <div class="constraint-card">
           <span class="constraint-title">固定显存</span>
-          <span class="constraint-symbol">{M_R_HTML}</span>
           <span class="constraint-value">{result['runtime_overhead_gb']:.1f}</span>
           <span class="constraint-unit">GB</span>
-          <span class="constraint-reason">按 &alpha;<sub>r</sub> × {M_W_HTML} 估算</span>
+          <span class="constraint-reason">框架与运行时常驻开销</span>
         </div>
         <div class="constraint-card">
           <span class="constraint-title">Cache 需求</span>
-          <span class="constraint-symbol">{C_PEAK_HTML} × {M_REQ_P95_HTML}</span>
           <span class="constraint-value">{peak_cache_gb:.1f}</span>
           <span class="constraint-unit">GB</span>
-          <span class="constraint-reason">并发预算 × 单请求 Cache</span>
+          <span class="constraint-reason">按并发预算估算的请求缓存占用</span>
         </div>
       </div>
       <div class="ha-detail-grid">
@@ -231,17 +212,17 @@ def build_memory_analysis_html(result: dict[str, Any]) -> str:
         <div class="ha-detail-card">
           <span class="ha-detail-label">单卡有效显存</span>
           <span class="ha-detail-value">{result['usable_vram_gb_per_gpu']:.1f} GB</span>
-          <span class="ha-detail-meta">{gpu.vram_gb:.0f} GB × {ETA_VRAM_HTML}</span>
+          <span class="ha-detail-meta">扣除安全水位后的单卡可用空间</span>
         </div>
         <div class="ha-detail-card">
           <span class="ha-detail-label">显存约束卡数</span>
           <span class="ha-detail-value">{result['gpu_count_by_memory']}</span>
-          <span class="ha-detail-meta">{G_MEM_HTML}</span>
+          <span class="ha-detail-meta">若只看显存，至少需要这些卡</span>
         </div>
         <div class="ha-detail-card">
           <span class="ha-detail-label">并发余量系数</span>
           <span class="ha-detail-value">{fmt_value(result['concurrency_margin_ratio_p95'], 2)}</span>
-          <span class="ha-detail-meta">{RHO_P95_HTML}</span>
+          <span class="ha-detail-meta">显存上还能承接多少在途请求</span>
         </div>
       </div>
       {section_html}
@@ -267,7 +248,7 @@ def build_throughput_analysis_html(result: dict[str, Any]) -> str:
         <div class="tp-card">
           <div class="tp-card-header">
             <span class="tp-card-title">Prefill</span>
-            <span class="tp-badge tp-badge-prefill">{G_PRE_HTML}</span>
+            <span class="tp-badge tp-badge-prefill">输入阶段</span>
           </div>
           <div class="tp-metric-stack">
             <div class="tp-metric-row"><span class="tp-metric-label">目标工作量</span><span class="tp-metric-value">{fmt_compact(result['tps_pre_target_peak'])} tok/s</span></div>
@@ -281,7 +262,7 @@ def build_throughput_analysis_html(result: dict[str, Any]) -> str:
         <div class="tp-card">
           <div class="tp-card-header">
             <span class="tp-card-title">Decode</span>
-            <span class="tp-badge tp-badge-decode">{G_DEC_HTML}</span>
+            <span class="tp-badge tp-badge-decode">输出阶段</span>
           </div>
           <div class="tp-metric-stack">
             <div class="tp-metric-row"><span class="tp-metric-label">目标工作量</span><span class="tp-metric-value">{fmt_compact(result['tps_dec_target_peak'])} tok/s</span></div>
@@ -320,24 +301,24 @@ def build_final_summary_html(result: dict[str, Any]) -> str:
           <div class="step-subtitle">{render_math_text("先给出 G_req，再回推总吞吐、可持续 QPS 与显存可承载在途量")}</div>
         </div>
       </div>
-      <div class="decision-label">① 三类约束取最大值</div>
+      <div class="decision-label">① 三类约束中取需求最高者</div>
       <div class="constraint-grid">
-        <div class="constraint-card"><span class="constraint-title">显存约束</span><span class="constraint-symbol">{G_MEM_HTML}</span><span class="constraint-value">{result['gpu_count_by_memory']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">显存下界</span></div>
-        <div class="constraint-card"><span class="constraint-title">Prefill 吞吐</span><span class="constraint-symbol">{G_PRE_HTML}</span><span class="constraint-value">{result['prefill_gpu_count_by_throughput']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">Prefill 吞吐下界</span></div>
-        <div class="constraint-card"><span class="constraint-title">Decode 吞吐</span><span class="constraint-symbol">{G_DEC_HTML}</span><span class="constraint-value">{result['decode_gpu_count_by_throughput']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">Decode 吞吐下界</span></div>
+        <div class="constraint-card"><span class="constraint-title">显存压力</span><span class="constraint-value">{result['gpu_count_by_memory']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">由显存占用决定</span></div>
+        <div class="constraint-card"><span class="constraint-title">输入处理压力</span><span class="constraint-value">{result['prefill_gpu_count_by_throughput']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">由输入吞吐决定</span></div>
+        <div class="constraint-card"><span class="constraint-title">输出生成压力</span><span class="constraint-value">{result['decode_gpu_count_by_throughput']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">由输出吞吐决定</span></div>
       </div>
-      <div class="final-formula">
+      <div class="final-formula final-summary-card">
         <div class="formula-term formula-result">
-          <span class="formula-label">{G_REQ_HTML}</span>
-          <span class="formula-value">{result['business_gpu_count']}</span>
+          <span class="formula-label">建议采购</span>
+          <span class="formula-value">{result['business_gpu_count']} GPUs</span>
         </div>
       </div>
       <div class="ha-detail-grid">
         <div class="ha-detail-card"><span class="ha-detail-label">主导约束</span><span class="ha-detail-value">{escape(dominant)}</span><span class="ha-detail-meta">业务基线由谁决定</span></div>
-        <div class="ha-detail-card"><span class="ha-detail-label">保守可持续 QPS</span><span class="ha-detail-value">{fmt_value(result['sustainable_qps_p95'], 2)} req/s</span><span class="ha-detail-meta">{LAMBDA_SUS_HTML}</span></div>
+        <div class="ha-detail-card"><span class="ha-detail-label">可持续 QPS</span><span class="ha-detail-value">{fmt_value(result['sustainable_qps_p95'], 2)} req/s</span><span class="ha-detail-meta">按当前配置可长期承接的请求速率</span></div>
         <div class="ha-detail-card"><span class="ha-detail-label">最大在途请求量</span><span class="ha-detail-value">{result['max_concurrency_by_memory_p95']}</span><span class="ha-detail-meta">显存口径</span></div>
-        <div class="ha-detail-card"><span class="ha-detail-label">每日 Decode token</span><span class="ha-detail-value">{fmt_compact(result['daily_decode_token_capacity_p95'])}</span><span class="ha-detail-meta">保守口径</span></div>
-        <div class="ha-detail-card"><span class="ha-detail-label">每日 Prefill token</span><span class="ha-detail-value">{fmt_compact(result['daily_prefill_token_capacity_p95'])}</span><span class="ha-detail-meta">保守口径</span></div>
+        <div class="ha-detail-card"><span class="ha-detail-label">每日输出 token</span><span class="ha-detail-value">{fmt_compact(result['daily_decode_token_capacity_p95'])}</span><span class="ha-detail-meta">对应输出生成能力</span></div>
+        <div class="ha-detail-card"><span class="ha-detail-label">每日输入 token</span><span class="ha-detail-value">{fmt_compact(result['daily_prefill_token_capacity_p95'])}</span><span class="ha-detail-meta">对应输入处理能力</span></div>
         {cost_html}
       </div>
       {section_html}

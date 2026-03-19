@@ -14,7 +14,7 @@ from presets import (
 
 
 @dataclass(frozen=True)
-class DefaultComponentValues:
+class UIInputs:
     model_dropdown: str
     precision_override: str
     gpu_preset_key: str
@@ -31,7 +31,7 @@ class DefaultComponentValues:
     compute_efficiency: int
 
     @classmethod
-    def default(cls) -> DefaultComponentValues:
+    def default(cls) -> UIInputs:
         profile = DEFAULT_BUSINESS_PROFILE
         return cls(
             model_dropdown=get_default_model_key(),
@@ -69,7 +69,7 @@ class DefaultComponentValues:
         )
 
     @classmethod
-    def from_raw_inputs(cls, raw_inputs: tuple[Any, ...]) -> DefaultComponentValues:
+    def from_raw_inputs(cls, raw_inputs: tuple[Any, ...]) -> UIInputs:
         return cls(*raw_inputs)
 
     def build_configs(self) -> tuple[ModelConfig, TrafficConfig, GPUConfig, RuntimeConfig]:
@@ -128,12 +128,6 @@ class DefaultComponentValues:
             compute_efficiency=compute_efficiency_value,
         )
         return base_model, traffic, base_gpu, runtime
-
-
-def default_component_values() -> DefaultComponentValues:
-    return DefaultComponentValues.default()
-
-
 def to_int(value: Any, field_name: str) -> int:
     if value is None or value == "":
         raise ValueError(f"{field_name} 不能为空")
@@ -157,13 +151,3 @@ def ensure_positive(value: float, field_name: str) -> None:
 def ensure_non_negative(value: float, field_name: str) -> None:
     if value < 0:
         raise ValueError(f"{field_name} 不能小于 0")
-
-
-def build_configs(
-    values: DefaultComponentValues,
-) -> tuple[ModelConfig, TrafficConfig, GPUConfig, RuntimeConfig]:
-    return values.build_configs()
-
-
-def build_default_configs() -> tuple[ModelConfig, TrafficConfig, GPUConfig, RuntimeConfig]:
-    return DefaultComponentValues.default().build_configs()

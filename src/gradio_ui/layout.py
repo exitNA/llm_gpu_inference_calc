@@ -7,7 +7,7 @@ from ui.common import APP_CSS
 
 from .bindings import bind_events
 from .constants import APP_TITLE
-from .config import default_component_values
+from .config import UIInputs
 from .runtime import build_theme, import_gradio
 from .sections import build_results_panel, build_sidebar
 
@@ -20,7 +20,7 @@ def build_app(progress: Callable[[str], None] | None = None):
     gr = import_gradio()
     if progress is not None:
         progress("加载默认输入配置")
-    defaults = default_component_values()
+    defaults = UIInputs.default()
 
     with warnings.catch_warnings():
         warnings.filterwarnings(
