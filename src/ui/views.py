@@ -11,8 +11,23 @@ from .common import (
     fmt_value,
     get_dominant_constraints,
     render_calc_accordion,
+    render_math_text,
     render_calc_panel,
 )
+
+
+G_REQ_HTML = '<span class="math-inline">G<sub>req</sub></span>'
+G_MEM_HTML = '<span class="math-inline">G<sub>mem</sub></span>'
+G_PRE_HTML = '<span class="math-inline">G<sub>pre</sub></span>'
+G_DEC_HTML = '<span class="math-inline">G<sub>dec</sub></span>'
+M_W_HTML = '<span class="math-inline">M<sub>w</sub></span>'
+M_R_HTML = '<span class="math-inline">M<sub>r</sub></span>'
+M_CACHE_HTML = '<span class="math-inline">M<sub>cache</sub></span>'
+C_PEAK_HTML = '<span class="math-inline">C<sub>peak</sub></span>'
+M_REQ_P95_HTML = '<span class="math-inline">M<sub>req</sub>(P95)</span>'
+ETA_VRAM_HTML = '<span class="math-inline">&eta;<sub>vram</sub></span>'
+RHO_P95_HTML = '<span class="math-inline">&rho;<sub>p95</sub></span>'
+LAMBDA_SUS_HTML = '<span class="math-inline">&lambda;<sub>sus</sub></span>'
 
 
 def build_request_detail_rows(result: dict[str, Any]) -> list[list[str]]:
@@ -51,7 +66,7 @@ def build_traffic_profile_header_html() -> str:
     <div class="selection-card">
       <p class="selection-eyebrow">business inputs</p>
       <p class="selection-copy">
-        按 sizing 主口径输入峰值 QPS、P95 输入输出长度，以及 P95 TTFT/E2E 目标。
+        界面已省略统计口径前缀；当前 sizing 默认按保守口径解释这些业务输入。
       </p>
     </div>
     """
@@ -87,6 +102,7 @@ def build_overview_html(result: dict[str, Any]) -> str:
     runtime = result["runtime_config"]
     calc_sections = result.get("calculation_process_sections", [])
     section_html = render_calc_accordion("业务目标折算与输入口径", calc_sections[0] if len(calc_sections) > 0 else None)
+    req_formula_html = render_math_text("G_req = max(G_mem, G_pre, G_dec)")
     return f"""
     <div class="result-card-unified">
       <div class="result-card-header">
@@ -98,7 +114,7 @@ def build_overview_html(result: dict[str, Any]) -> str:
           <div class="hero-model-name-large">{escape(result['model_name'])}</div>
           <div class="hero-tag-row">
             <span class="hero-constraint constraint-throughput">{escape(dominant)}</span>
-            <span class="hero-strategy-tag">G_req = max(G_mem, G_pre, G_dec)</span>
+            <span class="hero-strategy-tag">{req_formula_html}</span>
           </div>
         </div>
       </div>
@@ -132,14 +148,14 @@ def build_overview_html(result: dict[str, Any]) -> str:
             <span class="result-item-label">QPS</span>
             <div class="result-item-content">
               <span class="result-item-value">{traffic.lambda_peak_qps:.2f}</span>
-              <span class="result-item-sub">峰值 req/s</span>
+              <span class="result-item-sub">业务请求速率</span>
             </div>
           </div>
           <div class="result-item-row">
             <span class="result-item-label">长度</span>
             <div class="result-item-content">
               <span class="result-item-value">{traffic.p95_total_tokens}</span>
-              <span class="result-item-sub">P95 总长度 tokens</span>
+              <span class="result-item-sub">总长度 tokens</span>
             </div>
           </div>
         </div>
@@ -151,8 +167,8 @@ def build_overview_html(result: dict[str, Any]) -> str:
           <div class="result-item-row">
             <span class="result-item-label">主结果</span>
             <div class="result-item-content">
-              <span class="result-item-value-compact">G_req {result['business_gpu_count']}</span>
-              <span class="result-item-sub">文档主口径卡数下界</span>
+              <span class="result-item-value-compact">{result['business_gpu_count']} GPUs</span>
+              <span class="result-item-sub">{G_REQ_HTML} 对应的最小卡数下界</span>
             </div>
           </div>
           <div class="result-item-row">
@@ -180,49 +196,52 @@ def build_memory_analysis_html(result: dict[str, Any]) -> str:
         <span class="step-number">1</span>
         <div>
           <div class="step-title">显存约束</div>
-          <div class="step-subtitle">Mw + Mr + M_cache 对应的总显存下界</div>
+          <div class="step-subtitle">{render_math_text("M_w + M_r + M_cache 对应的总显存下界")}</div>
         </div>
       </div>
       <div class="constraint-grid">
         <div class="constraint-card constraint-winner">
-          <span class="constraint-title">权重显存 Mw</span>
+          <span class="constraint-title">权重显存</span>
+          <span class="constraint-symbol">{M_W_HTML}</span>
           <span class="constraint-value">{result['weight_with_overhead_gb']:.1f}</span>
           <span class="constraint-unit">GB</span>
-          <span class="constraint-reason">含 α_w 后的模型权重显存</span>
+          <span class="constraint-reason">含 &alpha;<sub>w</sub> 后的模型权重显存</span>
         </div>
         <div class="constraint-card">
-          <span class="constraint-title">固定显存 Mr</span>
+          <span class="constraint-title">固定显存</span>
+          <span class="constraint-symbol">{M_R_HTML}</span>
           <span class="constraint-value">{result['runtime_overhead_gb']:.1f}</span>
           <span class="constraint-unit">GB</span>
-          <span class="constraint-reason">按 α_r × Mw 估算</span>
+          <span class="constraint-reason">按 &alpha;<sub>r</sub> × {M_W_HTML} 估算</span>
         </div>
         <div class="constraint-card">
-          <span class="constraint-title">峰值 Cache</span>
+          <span class="constraint-title">Cache 需求</span>
+          <span class="constraint-symbol">{C_PEAK_HTML} × {M_REQ_P95_HTML}</span>
           <span class="constraint-value">{peak_cache_gb:.1f}</span>
           <span class="constraint-unit">GB</span>
-          <span class="constraint-reason">C_peak^budget × M_cache^req(S_p95)</span>
+          <span class="constraint-reason">并发预算 × 单请求 Cache</span>
         </div>
       </div>
       <div class="ha-detail-grid">
         <div class="ha-detail-card">
           <span class="ha-detail-label">总显存需求</span>
           <span class="ha-detail-value">{result['memory_for_sizing_gb']:.1f} GB</span>
-          <span class="ha-detail-meta">峰值 QPS + P95 长度口径</span>
+          <span class="ha-detail-meta">业务 sizing 口径</span>
         </div>
         <div class="ha-detail-card">
           <span class="ha-detail-label">单卡有效显存</span>
           <span class="ha-detail-value">{result['usable_vram_gb_per_gpu']:.1f} GB</span>
-          <span class="ha-detail-meta">{gpu.vram_gb:.0f} GB × η_vram</span>
+          <span class="ha-detail-meta">{gpu.vram_gb:.0f} GB × {ETA_VRAM_HTML}</span>
         </div>
         <div class="ha-detail-card">
           <span class="ha-detail-label">显存约束卡数</span>
           <span class="ha-detail-value">{result['gpu_count_by_memory']}</span>
-          <span class="ha-detail-meta">G_mem</span>
+          <span class="ha-detail-meta">{G_MEM_HTML}</span>
         </div>
         <div class="ha-detail-card">
           <span class="ha-detail-label">并发余量系数</span>
           <span class="ha-detail-value">{fmt_value(result['concurrency_margin_ratio_p95'], 2)}</span>
-          <span class="ha-detail-meta">ρ_conc,p95</span>
+          <span class="ha-detail-meta">{RHO_P95_HTML}</span>
         </div>
       </div>
       {section_html}
@@ -241,37 +260,37 @@ def build_throughput_analysis_html(result: dict[str, Any]) -> str:
         <span class="step-number">2</span>
         <div>
           <div class="step-title">吞吐与时延必要条件</div>
-          <div class="step-subtitle">峰值 token 工作量决定 G_pre/G_dec，时延只做单卡必要条件检查</div>
+          <div class="step-subtitle">{render_math_text("目标 token 工作量决定 G_pre / G_dec，时延只做单卡必要条件检查")}</div>
         </div>
       </div>
       <div class="throughput-grid">
         <div class="tp-card">
           <div class="tp-card-header">
             <span class="tp-card-title">Prefill</span>
-            <span class="tp-badge tp-badge-prefill">G_pre</span>
+            <span class="tp-badge tp-badge-prefill">{G_PRE_HTML}</span>
           </div>
           <div class="tp-metric-stack">
-            <div class="tp-metric-row"><span class="tp-metric-label">峰值工作量</span><span class="tp-metric-value">{fmt_compact(result['tps_pre_target_peak'])} tok/s</span></div>
+            <div class="tp-metric-row"><span class="tp-metric-label">目标工作量</span><span class="tp-metric-value">{fmt_compact(result['tps_pre_target_peak'])} tok/s</span></div>
             <div class="tp-metric-row"><span class="tp-metric-label">带宽上界</span><span class="tp-metric-value">{fmt_compact(result['prefill_tps_p95_bw_limited'])} tok/s</span></div>
             <div class="tp-metric-row"><span class="tp-metric-label">算力上界</span><span class="tp-metric-value">{fmt_compact(result['prefill_tps_p95_compute_limited'])} tok/s</span></div>
             <div class="tp-metric-row"><span class="tp-metric-label">单卡吞吐</span><span class="tp-metric-value">{fmt_compact(result['prefill_tps_p95_card'])} tok/s</span></div>
           </div>
           <div class="tp-result"><span class="tp-result-label">卡数下界</span><span class="tp-result-value">{result['prefill_gpu_count_by_throughput']}</span></div>
-          <div class="tp-result" style="margin-top:10px;"><span class="tp-result-label">P95 TTFT 检查</span><span class="tp-result-value">{prefill_ok}</span></div>
+          <div class="tp-result" style="margin-top:10px;"><span class="tp-result-label">TTFT 检查</span><span class="tp-result-value">{prefill_ok}</span></div>
         </div>
         <div class="tp-card">
           <div class="tp-card-header">
             <span class="tp-card-title">Decode</span>
-            <span class="tp-badge tp-badge-decode">G_dec</span>
+            <span class="tp-badge tp-badge-decode">{G_DEC_HTML}</span>
           </div>
           <div class="tp-metric-stack">
-            <div class="tp-metric-row"><span class="tp-metric-label">峰值工作量</span><span class="tp-metric-value">{fmt_compact(result['tps_dec_target_peak'])} tok/s</span></div>
+            <div class="tp-metric-row"><span class="tp-metric-label">目标工作量</span><span class="tp-metric-value">{fmt_compact(result['tps_dec_target_peak'])} tok/s</span></div>
             <div class="tp-metric-row"><span class="tp-metric-label">带宽上界</span><span class="tp-metric-value">{fmt_compact(result['decode_tps_bw_limited'])} tok/s</span></div>
             <div class="tp-metric-row"><span class="tp-metric-label">算力上界</span><span class="tp-metric-value">{fmt_compact(result['decode_tps_compute_limited'])} tok/s</span></div>
             <div class="tp-metric-row"><span class="tp-metric-label">单卡吞吐</span><span class="tp-metric-value">{fmt_compact(result['decode_tps_card'])} tok/s</span></div>
           </div>
           <div class="tp-result"><span class="tp-result-label">卡数下界</span><span class="tp-result-value">{result['decode_gpu_count_by_throughput']}</span></div>
-          <div class="tp-result" style="margin-top:10px;"><span class="tp-result-label">P95 Decode 检查</span><span class="tp-result-value">{decode_ok}</span></div>
+          <div class="tp-result" style="margin-top:10px;"><span class="tp-result-label">Decode 时延检查</span><span class="tp-result-value">{decode_ok}</span></div>
         </div>
       </div>
       {section_html}
@@ -298,25 +317,25 @@ def build_final_summary_html(result: dict[str, Any]) -> str:
         <span class="step-number">3</span>
         <div>
           <div class="step-title">最终卡数与能力回推</div>
-          <div class="step-subtitle">先给出 G_req，再回推总吞吐、可持续 QPS 与显存可承载在途量</div>
+          <div class="step-subtitle">{render_math_text("先给出 G_req，再回推总吞吐、可持续 QPS 与显存可承载在途量")}</div>
         </div>
       </div>
       <div class="decision-label">① 三类约束取最大值</div>
       <div class="constraint-grid">
-        <div class="constraint-card"><span class="constraint-title">G_mem</span><span class="constraint-value">{result['gpu_count_by_memory']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">显存下界</span></div>
-        <div class="constraint-card"><span class="constraint-title">G_pre</span><span class="constraint-value">{result['prefill_gpu_count_by_throughput']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">Prefill 吞吐下界</span></div>
-        <div class="constraint-card"><span class="constraint-title">G_dec</span><span class="constraint-value">{result['decode_gpu_count_by_throughput']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">Decode 吞吐下界</span></div>
+        <div class="constraint-card"><span class="constraint-title">显存约束</span><span class="constraint-symbol">{G_MEM_HTML}</span><span class="constraint-value">{result['gpu_count_by_memory']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">显存下界</span></div>
+        <div class="constraint-card"><span class="constraint-title">Prefill 吞吐</span><span class="constraint-symbol">{G_PRE_HTML}</span><span class="constraint-value">{result['prefill_gpu_count_by_throughput']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">Prefill 吞吐下界</span></div>
+        <div class="constraint-card"><span class="constraint-title">Decode 吞吐</span><span class="constraint-symbol">{G_DEC_HTML}</span><span class="constraint-value">{result['decode_gpu_count_by_throughput']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">Decode 吞吐下界</span></div>
       </div>
       <div class="final-formula">
         <div class="formula-term formula-result">
-          <span class="formula-label">G_req</span>
+          <span class="formula-label">{G_REQ_HTML}</span>
           <span class="formula-value">{result['business_gpu_count']}</span>
         </div>
       </div>
       <div class="ha-detail-grid">
         <div class="ha-detail-card"><span class="ha-detail-label">主导约束</span><span class="ha-detail-value">{escape(dominant)}</span><span class="ha-detail-meta">业务基线由谁决定</span></div>
-        <div class="ha-detail-card"><span class="ha-detail-label">保守可持续 QPS</span><span class="ha-detail-value">{fmt_value(result['sustainable_qps_p95'], 2)} req/s</span><span class="ha-detail-meta">P95 长度口径</span></div>
-        <div class="ha-detail-card"><span class="ha-detail-label">最大在途请求量</span><span class="ha-detail-value">{result['max_concurrency_by_memory_p95']}</span><span class="ha-detail-meta">显存口径 P95</span></div>
+        <div class="ha-detail-card"><span class="ha-detail-label">保守可持续 QPS</span><span class="ha-detail-value">{fmt_value(result['sustainable_qps_p95'], 2)} req/s</span><span class="ha-detail-meta">{LAMBDA_SUS_HTML}</span></div>
+        <div class="ha-detail-card"><span class="ha-detail-label">最大在途请求量</span><span class="ha-detail-value">{result['max_concurrency_by_memory_p95']}</span><span class="ha-detail-meta">显存口径</span></div>
         <div class="ha-detail-card"><span class="ha-detail-label">每日 Decode token</span><span class="ha-detail-value">{fmt_compact(result['daily_decode_token_capacity_p95'])}</span><span class="ha-detail-meta">保守口径</span></div>
         <div class="ha-detail-card"><span class="ha-detail-label">每日 Prefill token</span><span class="ha-detail-value">{fmt_compact(result['daily_prefill_token_capacity_p95'])}</span><span class="ha-detail-meta">保守口径</span></div>
         {cost_html}

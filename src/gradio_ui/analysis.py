@@ -13,7 +13,11 @@ from ui.views import (
     build_throughput_analysis_html,
 )
 
-from .config import build_configs, build_default_configs, default_component_values
+from .config import (
+    DefaultComponentValues,
+    build_default_configs,
+    default_component_values,
+)
 
 
 def _print_console_calc_trace(context: str, result: dict[str, Any]) -> None:
@@ -45,7 +49,8 @@ def build_default_result_text() -> str:
 def run_analysis(
     *raw_inputs: Any,
 ) -> tuple[str, str, str, str, list[list[str]], list[list[str]], str, dict[str, Any]]:
-    model, traffic, gpu, runtime = build_configs(*raw_inputs)
+    input_values = DefaultComponentValues.from_raw_inputs(raw_inputs)
+    model, traffic, gpu, runtime = input_values.build_configs()
     result = evaluate_single_model(
         model=model,
         traffic=traffic,
@@ -69,7 +74,7 @@ def reset_all() -> tuple[Any, ...]:
     defaults = default_component_values()
     default_result = build_default_result()
     return (
-        *defaults,
+        *defaults.gradio_values(),
         build_overview_html(default_result),
         build_memory_analysis_html(default_result),
         build_throughput_analysis_html(default_result),

@@ -14,6 +14,7 @@ from ui.views import (
 )
 
 from .constants import KV_TABLE_HEADERS, REQUEST_TABLE_HEADERS
+from .config import DefaultComponentValues
 from .runtime import build_config_section_header_html
 
 
@@ -78,34 +79,42 @@ class ResultComponents:
         ]
 
 
-def build_sidebar(gr, defaults: tuple[Any, ...]) -> SidebarComponents:
+def build_sidebar(gr, defaults: DefaultComponentValues) -> SidebarComponents:
     with gr.Column(scale=4, min_width=420, elem_classes=["workspace-sidebar"]):
         with gr.Group(elem_classes=["config-panel"]):
             with gr.Group(elem_classes=["config-section", "config-section-model"]):
                 gr.HTML(build_config_section_header_html("🧠", "模型配置", "模型选择与显存附加系数"))
-                model_dropdown = gr.Dropdown(label="选择模型", choices=get_model_choices(), value=defaults[0])
+                model_dropdown = gr.Dropdown(
+                    label="选择模型",
+                    choices=get_model_choices(),
+                    value=defaults.model_dropdown,
+                )
                 weight_overhead_ratio = gr.Slider(
                     minimum=0,
                     maximum=100,
                     step=1,
                     label="权重附加系数 α_w (%)",
-                    value=defaults[9],
+                    value=defaults.weight_overhead_ratio,
                 )
                 runtime_overhead_ratio = gr.Slider(
                     minimum=0,
                     maximum=100,
                     step=1,
                     label="运行时固定显存系数 α_r (%)",
-                    value=defaults[10],
+                    value=defaults.runtime_overhead_ratio,
                 )
 
             with gr.Group(elem_classes=["config-section", "config-section-gpu"]):
                 gr.HTML(build_config_section_header_html("🖥️", "显卡配置", "GPU 规格与效率系数"))
-                gpu_preset_key = gr.Dropdown(label="选择显卡", choices=get_gpu_choices(), value=defaults[2])
+                gpu_preset_key = gr.Dropdown(
+                    label="选择显卡",
+                    choices=get_gpu_choices(),
+                    value=defaults.gpu_preset_key,
+                )
                 precision_dropdown = gr.Radio(
                     label="推理精度",
                     choices=["fp8", "fp16", "bf16"],
-                    value=defaults[1],
+                    value=defaults.precision_override,
                     elem_classes=["compact-radio"],
                 )
                 usable_vram_ratio = gr.Slider(
@@ -113,38 +122,64 @@ def build_sidebar(gr, defaults: tuple[Any, ...]) -> SidebarComponents:
                     maximum=100,
                     step=1,
                     label="可用显存比例 η_vram (%)",
-                    value=defaults[11],
+                    value=defaults.usable_vram_ratio,
                 )
                 bandwidth_efficiency = gr.Slider(
                     minimum=10,
                     maximum=100,
                     step=1,
                     label="带宽利用率 η_bw (%)",
-                    value=defaults[12],
+                    value=defaults.bandwidth_efficiency,
                 )
                 compute_efficiency = gr.Slider(
                     minimum=10,
                     maximum=100,
                     step=1,
                     label="算力利用率 η_cmp (%)",
-                    value=defaults[13],
+                    value=defaults.compute_efficiency,
                 )
 
             with gr.Group(elem_classes=["config-section", "config-section-traffic"]):
-                gr.HTML(build_config_section_header_html("🚦", "业务目标", "峰值 QPS、P95 长度与 P95 时延目标"))
+                gr.HTML(
+                    build_config_section_header_html(
+                        "🚦",
+                        "业务目标",
+                        "界面已省略统计口径前缀；当前 sizing 默认按保守口径解释输入。",
+                    )
+                )
                 with gr.Row(elem_classes=["config-field-grid"]):
-                    lambda_peak_qps = gr.Number(label="峰值 QPS", value=defaults[3], precision=2)
+                    lambda_peak_qps = gr.Number(
+                        label="QPS",
+                        value=defaults.lambda_peak_qps,
+                        precision=2,
+                    )
                     concurrency_safety_factor_pct = gr.Number(
                         label="在途安全系数 (%)",
-                        value=defaults[8],
+                        value=defaults.concurrency_safety_factor_pct,
                         precision=0,
                     )
                 with gr.Row(elem_classes=["config-field-grid"]):
-                    p95_input_tokens = gr.Number(label="P95 输入", value=defaults[4], precision=0)
-                    p95_output_tokens = gr.Number(label="P95 输出", value=defaults[5], precision=0)
+                    p95_input_tokens = gr.Number(
+                        label="输入长度",
+                        value=defaults.p95_input_tokens,
+                        precision=0,
+                    )
+                    p95_output_tokens = gr.Number(
+                        label="输出长度",
+                        value=defaults.p95_output_tokens,
+                        precision=0,
+                    )
                 with gr.Row(elem_classes=["config-field-grid"]):
-                    ttft_p95_sec = gr.Number(label="P95 TTFT (s)", value=defaults[6], precision=2)
-                    e2e_p95_sec = gr.Number(label="P95 E2E (s)", value=defaults[7], precision=2)
+                    ttft_p95_sec = gr.Number(
+                        label="TTFT 目标 (s)",
+                        value=defaults.ttft_p95_sec,
+                        precision=2,
+                    )
+                    e2e_p95_sec = gr.Number(
+                        label="E2E 目标 (s)",
+                        value=defaults.e2e_p95_sec,
+                        precision=2,
+                    )
 
             with gr.Row(elem_classes=["button-row"]):
                 reset_button = gr.Button("恢复默认", variant="secondary")
