@@ -206,88 +206,51 @@ def _render_tp_stage_shell(
     latency_text = "满足" if latency_ok else "不满足"
     necessity_text = "满足" if necessity_ok else "不满足"
     status_class = "is-ok" if necessity_ok else "is-risk"
-
-    if necessity_ok:
-        summary = (
-            f"当前建议采购 {baseline_count} 张卡时，该阶段的理论总服务率约为 "
-            f"{fmt_compact(cluster_capacity)} tok/s，已经覆盖目标工作量 {fmt_compact(workload)} tok/s。"
-        )
-    else:
-        summary = (
-            f"当前建议采购 {baseline_count} 张卡时，该阶段的理论总服务率约为 "
-            f"{fmt_compact(cluster_capacity)} tok/s，仍低于目标工作量 {fmt_compact(workload)} tok/s。"
-        )
-
-    summary += " 这里的卡数只作必要条件参考，不会直接抬高采购主结果。"
-
-    proof_html = "".join(
-        [
-            _render_tp_proof_card(_find_calc_step_in_sections(sections, workload_label)),
-            _render_tp_proof_card(_find_calc_step_in_sections(sections, service_label)),
-            _render_tp_proof_card(_find_calc_step_in_sections(sections, reference_label)),
-            _render_tp_proof_card(_find_calc_step_in_sections(sections, latency_label)),
-        ]
+    summary = (
+        f"显存基线 {baseline_count} 卡，"
+        f"{'已覆盖' if necessity_ok else '未覆盖'}该阶段参考卡数 {reference_count} 卡；"
+        f"时延必要条件{latency_text}。"
     )
 
     return f"""
-    <div class="throughput-shell throughput-shell-{stage_key}">
-      <div class="throughput-spotlight throughput-spotlight-{stage_key}">
-        <div class="tp-card-header">
-          <span class="tp-card-title">{stage_title}</span>
+    <div class="tp-stage-card tp-stage-card-{stage_key}">
+      <div class="tp-stage-head">
+        <div class="tp-stage-title-wrap">
+          <span class="tp-stage-title">{stage_title}</span>
           <span class="tp-badge {badge_class}">{badge_text}</span>
         </div>
-        <span class="memory-result-kicker">理论参考卡数</span>
-        <div class="memory-result-main">
-          <span class="memory-result-value">{reference_count}</span>
-          <span class="memory-result-unit">GPUs</span>
+        <span class="tp-stage-status {status_class}">{necessity_text}</span>
+      </div>
+      <div class="tp-stage-hero">
+        <div class="tp-stage-hero-main">
+          <span class="tp-stage-hero-label">理论参考卡数</span>
+          <span class="tp-stage-hero-value">{reference_count} 卡</span>
         </div>
-        <span class="memory-result-caption">只用于必要条件参考，不直接并入采购主结果</span>
-        <div class="memory-result-proof">
-          <span class="memory-result-formula">当前显存基线 {baseline_count} 张，{'已覆盖' if necessity_ok else f'仍差 {gap_gpus} 张'}</span>
-          <span class="memory-result-note">目标工作量与单卡理论服务率反推得到该阶段的参考卡数。</span>
-        </div>
-        <div class="memory-result-stats">
-          <div class="memory-result-stat">
-            <span class="memory-result-stat-label">当前显存基线</span>
-            <span class="memory-result-stat-value">{baseline_count} 卡</span>
-          </div>
-          <div class="memory-result-stat">
-            <span class="memory-result-stat-label">当前总理论服务率</span>
-            <span class="memory-result-stat-value">{fmt_compact(cluster_capacity)} tok/s</span>
-          </div>
-          <div class="memory-result-stat">
-            <span class="memory-result-stat-label">相对目标</span>
-            <span class="memory-result-stat-value">{capacity_ratio} · {capacity_gap_text}</span>
-          </div>
-          <div class="memory-result-stat">
-            <span class="memory-result-stat-label">时延必要条件</span>
-            <span class="memory-result-stat-value">{latency_text}</span>
-          </div>
+        <div class="tp-stage-hero-side">
+          <span class="tp-stage-hero-side-label">当前基线</span>
+          <span class="tp-stage-hero-side-value">{baseline_count} 卡</span>
         </div>
       </div>
-      <div class="throughput-cause-cluster">
-        <div class="memory-cause-heading">
-          <span class="memory-cause-kicker">{stage_title} 必要条件结论</span>
-          <span class="memory-cause-summary">{summary}</span>
+      <div class="tp-stage-metrics">
+        <div class="tp-stage-metric">
+          <span class="tp-stage-metric-label">目标工作量</span>
+          <span class="tp-stage-metric-value">{fmt_compact(workload)} tok/s</span>
         </div>
-        <div class="throughput-status-strip {status_class}">
-          <div class="throughput-status-item">
-            <span class="throughput-status-label">必要条件结果</span>
-            <span class="throughput-status-value">{necessity_text}</span>
-          </div>
-          <div class="throughput-status-item">
-            <span class="throughput-status-label">目标工作量</span>
-            <span class="throughput-status-value">{fmt_compact(workload)} tok/s</span>
-          </div>
-          <div class="throughput-status-item">
-            <span class="throughput-status-label">理论总服务率</span>
-            <span class="throughput-status-value">{fmt_compact(cluster_capacity)} tok/s</span>
-          </div>
+        <div class="tp-stage-metric">
+          <span class="tp-stage-metric-label">理论总服务率</span>
+          <span class="tp-stage-metric-value">{fmt_compact(cluster_capacity)} tok/s</span>
         </div>
-        <div class="throughput-proof-grid">
-          {proof_html}
+        <div class="tp-stage-metric">
+          <span class="tp-stage-metric-label">相对目标</span>
+          <span class="tp-stage-metric-value">{capacity_ratio} · {capacity_gap_text}</span>
+        </div>
+        <div class="tp-stage-metric">
+          <span class="tp-stage-metric-label">时延必要条件</span>
+          <span class="tp-stage-metric-value">{latency_text}</span>
         </div>
       </div>
+      <div class="tp-stage-summary">{summary}{'' if necessity_ok else f' 仍差 {gap_gpus} 卡。'}</div>
+      <div class="tp-stage-footnote">详细公式与代入值见下方展开项。</div>
     </div>
     """
 
@@ -328,87 +291,161 @@ def build_overview_html(result: dict[str, Any]) -> str:
     gpu = result["gpu_config"]
     runtime = result["runtime_config"]
     calc_sections = result.get("calculation_process_sections", [])
+    total_memory_gib = result["memory_for_sizing_gib"]
+    usable_vram_gib = result["usable_vram_gib_per_gpu"]
+    required_gpu_ratio = total_memory_gib / usable_vram_gib if usable_vram_gib > 0 else 0.0
+    cache_gib = max(total_memory_gib - result["weight_with_overhead_gib"] - result["runtime_overhead_gib"], 0.0)
+    prefill_relation = "<=" if result["prefill_gpu_count_by_throughput"] <= result["business_gpu_count"] else ">"
+    decode_relation = "<=" if result["decode_gpu_count_by_throughput"] <= result["business_gpu_count"] else ">"
     section_html = render_calc_accordion("业务目标折算与输入口径", calc_sections[0] if len(calc_sections) > 0 else None)
     return f"""
     <div class="result-card-unified">
-      <div class="result-card-header">
-        <div class="hero-gpu-count-box">
-          <span class="hero-gpu-number">{result['business_gpu_count']}</span>
-          <span class="hero-gpu-unit">GPUs</span>
+      <div class="overview-hero">
+        <div class="overview-primary-result">
+          <div class="overview-primary-topline">
+            <div class="overview-model-block">
+              <div class="hero-model-name-large">{escape(result['model_name'])}</div>
+              <div class="hero-tag-row">
+                <span class="hero-constraint constraint-throughput">{escape(dominant)}</span>
+                <span class="hero-strategy-tag">G_mem = {result['gpu_count_by_memory']} 卡</span>
+                <span class="hero-strategy-tag">G_pre = {result['prefill_gpu_count_by_throughput']} 卡</span>
+                <span class="hero-strategy-tag">G_dec = {result['decode_gpu_count_by_throughput']} 卡</span>
+              </div>
+            </div>
+            <div class="overview-primary-badge">
+              <span class="overview-primary-badge-value">{result['business_gpu_count']}</span>
+              <span class="overview-primary-badge-unit">卡</span>
+            </div>
+          </div>
+          <div class="overview-summary-line">G_req = {result['business_gpu_count']} 卡</div>
+          <div class="overview-summary-formula">
+            {total_memory_gib:.1f} GiB / {usable_vram_gib:.1f} GiB = {required_gpu_ratio:.2f} -> 9 卡
+          </div>
+          <div class="overview-status-strip">
+            <div class="overview-status-pill">
+              <span class="overview-status-label">G_pre 对照</span>
+              <span class="overview-status-value">{result['prefill_gpu_count_by_throughput']} {prefill_relation} {result['business_gpu_count']}</span>
+            </div>
+            <div class="overview-status-pill">
+              <span class="overview-status-label">G_dec 对照</span>
+              <span class="overview-status-value">{result['decode_gpu_count_by_throughput']} {decode_relation} {result['business_gpu_count']}</span>
+            </div>
+            <div class="overview-status-pill">
+              <span class="overview-status-label">主结果</span>
+              <span class="overview-status-value">G_req = {result['business_gpu_count']}</span>
+            </div>
+          </div>
         </div>
-        <div class="result-card-title-area">
-          <div class="hero-model-name-large">{escape(result['model_name'])}</div>
-          <div class="hero-tag-row">
-            <span class="hero-constraint constraint-throughput">{escape(dominant)}</span>
-            <span class="hero-strategy-tag">主结果按显存给出；吞吐与时延只做必要条件检查</span>
+        <div class="overview-side-stack">
+          <div class="hero-gpu-focus">
+            <span class="hero-gpu-focus-label">GPU</span>
+            <span class="hero-gpu-focus-name">{escape(gpu.gpu_name)}</span>
+            <div class="hero-gpu-focus-meta">
+              <span class="hero-gpu-focus-chip">{gpu.vram_gb:.0f} GB 显存</span>
+              <span class="hero-gpu-focus-chip">权重 {escape(runtime.precision.upper())}</span>
+              <span class="hero-gpu-focus-chip">KV {escape(runtime.kv_cache_dtype.upper())}</span>
+            </div>
           </div>
         </div>
       </div>
-      <div class="result-card-body-grid">
-        <div class="result-group-card">
-          <div class="result-group-header">
-            <span class="group-icon">🧠</span>
-            <span class="result-group-title">模型与硬件</span>
-          </div>
-          <div class="result-item-row">
-            <span class="result-item-label">模型</span>
-            <div class="result-item-content">
-              <span class="result-item-value">{result['model_config'].num_params_billion:.0f}B</span>
-              <span class="result-item-sub">{escape(result['arch_family'])} · {escape(result['attention_type'])}</span>
+      <div class="overview-body-grid">
+        <div class="overview-panel overview-dual-panel">
+          <div class="overview-section-block">
+            <div class="overview-panel-header">
+              <span class="group-icon">🚦</span>
+              <span class="result-group-title">输入口径</span>
+            </div>
+            <div class="overview-data-list">
+              <div class="overview-data-row">
+                <span class="overview-data-label">峰值 QPS</span>
+                <span class="overview-data-value">{result['lambda_peak_qps_effective']:.2f}</span>
+                <span class="overview-data-meta">{escape(result['qps_model_label'])}</span>
+              </div>
+              <div class="overview-data-row">
+                <span class="overview-data-label">P95 总长度</span>
+                <span class="overview-data-value">{traffic.p95_total_tokens}</span>
+                <span class="overview-data-meta">{traffic.p95_input_tokens} in + {traffic.p95_output_tokens} out</span>
+              </div>
+              <div class="overview-data-row">
+                <span class="overview-data-label">峰值在途</span>
+                <span class="overview-data-value">{fmt_compact(result['c_peak_budget'])}</span>
+                <span class="overview-data-meta">{escape(result['concurrency_model_label'])}</span>
+              </div>
+              <div class="overview-data-row">
+                <span class="overview-data-label">模型规格</span>
+                <span class="overview-data-value">{result['model_config'].num_params_billion:.0f}B</span>
+                <span class="overview-data-meta">{escape(result['arch_family'])} · {escape(result['attention_type'])}</span>
+              </div>
             </div>
           </div>
-          <div class="result-item-row">
-            <span class="result-item-label">GPU</span>
-            <div class="result-item-content">
-              <span class="result-item-value">{gpu.vram_gb:.0f}GB</span>
-              <span class="result-item-sub">{escape(gpu.gpu_name)} ({runtime.precision}/{runtime.kv_cache_dtype})</span>
+          <div class="overview-section-block">
+            <div class="overview-panel-header">
+              <span class="group-icon">📶</span>
+              <span class="result-group-title">工作量与对照</span>
+            </div>
+            <div class="overview-data-list">
+              <div class="overview-data-row">
+                <span class="overview-data-label">Prefill 工作量</span>
+                <span class="overview-data-value">{fmt_compact(result['tps_pre_target_peak'])}</span>
+                <span class="overview-data-meta">G_pre = {result['prefill_gpu_count_by_throughput']}</span>
+              </div>
+              <div class="overview-data-row">
+                <span class="overview-data-label">Decode 工作量</span>
+                <span class="overview-data-value">{fmt_compact(result['tps_dec_target_peak'])}</span>
+                <span class="overview-data-meta">G_dec = {result['decode_gpu_count_by_throughput']}</span>
+              </div>
+              <div class="overview-data-row">
+                <span class="overview-data-label">Prefill 对照</span>
+                <span class="overview-data-value">{result['prefill_gpu_count_by_throughput']} {prefill_relation} {result['business_gpu_count']}</span>
+                <span class="overview-data-meta">参考卡数 vs 基线</span>
+              </div>
+              <div class="overview-data-row">
+                <span class="overview-data-label">Decode 对照</span>
+                <span class="overview-data-value">{result['decode_gpu_count_by_throughput']} {decode_relation} {result['business_gpu_count']}</span>
+                <span class="overview-data-meta">参考卡数 vs 基线</span>
+              </div>
             </div>
           </div>
         </div>
-        <div class="result-group-card">
-          <div class="result-group-header">
-            <span class="group-icon">🚦</span>
-            <span class="result-group-title">业务目标</span>
-          </div>
-          <div class="result-item-row">
-            <span class="result-item-label">峰值 QPS</span>
-            <div class="result-item-content">
-              <span class="result-item-value">{result['lambda_peak_qps_effective']:.2f}</span>
-              <span class="result-item-sub">{escape(result['qps_model_label'])}</span>
-            </div>
-          </div>
-          <div class="result-item-row">
-            <span class="result-item-label">长度</span>
-            <div class="result-item-content">
-              <span class="result-item-value">{traffic.p95_total_tokens}</span>
-              <span class="result-item-sub">总长度 tokens</span>
-            </div>
-          </div>
-          <div class="result-item-row">
-            <span class="result-item-label">峰值在途</span>
-            <div class="result-item-content">
-              <span class="result-item-value">{fmt_compact(result['c_peak_budget'])}</span>
-              <span class="result-item-sub">{escape(result['concurrency_model_label'])}</span>
-            </div>
-          </div>
-        </div>
-        <div class="result-group-card highlight-group">
-          <div class="result-group-header">
+        <div class="overview-memory-card overview-panel highlight-group">
+          <div class="overview-panel-header">
             <span class="group-icon">⚡</span>
-            <span class="result-group-title">结论与风险</span>
+            <span class="result-group-title">显存结果</span>
           </div>
-          <div class="result-item-row">
-            <span class="result-item-label">主结果</span>
-            <div class="result-item-content">
-              <span class="result-item-value-compact">{result['business_gpu_count']} GPUs</span>
-              <span class="result-item-sub">当前版本按显存约束给采购基线</span>
+          <div class="overview-memory-main">
+            <div class="overview-memory-formula">
+              <span class="overview-memory-number">{total_memory_gib:.1f}</span>
+              <span class="overview-memory-unit">GiB</span>
+              <span class="overview-memory-operator">/</span>
+              <span class="overview-memory-number">{usable_vram_gib:.1f}</span>
+              <span class="overview-memory-unit">GiB</span>
+              <span class="overview-memory-operator">=</span>
+              <span class="overview-memory-ratio">{required_gpu_ratio:.2f}</span>
+              <span class="overview-memory-operator">-></span>
+              <span class="overview-memory-baseline">{result['business_gpu_count']} 卡</span>
             </div>
+            <div class="overview-memory-caption">总需求显存 / 单卡有效显存 = 原始比值 / 向上取整</div>
           </div>
-          <div class="result-item-row">
-            <span class="result-item-label">时延风险</span>
-            <div class="result-item-content">
-              <span class="result-item-value">{escape(str(result['latency_risk_level']).upper())}</span>
-              <span class="result-item-sub">{escape(result['latency_risk_note'])}</span>
+          <div class="overview-data-list overview-data-list-compact">
+            <div class="overview-data-row">
+              <span class="overview-data-label">权重显存</span>
+              <span class="overview-data-value">{result['weight_with_overhead_gib']:.1f}</span>
+              <span class="overview-data-meta">已含 α_w</span>
+            </div>
+            <div class="overview-data-row">
+              <span class="overview-data-label">固定显存</span>
+              <span class="overview-data-value">{result['runtime_overhead_gib']:.1f}</span>
+              <span class="overview-data-meta">运行时常驻</span>
+            </div>
+            <div class="overview-data-row">
+              <span class="overview-data-label">Cache 显存</span>
+              <span class="overview-data-value">{cache_gib:.1f}</span>
+              <span class="overview-data-meta">峰值在途 × 单请求 Cache</span>
+            </div>
+            <div class="overview-data-row">
+              <span class="overview-data-label">主导约束</span>
+              <span class="overview-data-value">{escape(dominant)}</span>
+              <span class="overview-data-meta">当前基线由显存决定</span>
             </div>
           </div>
         </div>
@@ -420,6 +457,7 @@ def build_overview_html(result: dict[str, Any]) -> str:
 
 def build_memory_analysis_html(result: dict[str, Any]) -> str:
     model = result["model_config"]
+    gpu = result["gpu_config"]
     runtime = result["runtime_config"]
     weight_gib = result["weight_with_overhead_gib"]
     runtime_gib = result["runtime_overhead_gib"]
@@ -505,7 +543,29 @@ def build_memory_analysis_html(result: dict[str, Any]) -> str:
         <span class="step-number">1</span>
         <div>
           <div class="step-title">显存约束</div>
-          <div class="step-subtitle">{render_math_text("M_w + M_r + M_cache 对应的总显存下界")}</div>
+          <div class="step-subtitle">{render_math_text("先回答“装不装得下”，再解释为什么最终是这张卡数")}</div>
+        </div>
+      </div>
+      <div class="insight-strip">
+        <div class="insight-card">
+          <span class="insight-label">总需求显存</span>
+          <span class="insight-value">{total_memory_gib:.1f} GiB</span>
+          <span class="insight-meta">权重 + 固定开销 + 峰值 Cache</span>
+        </div>
+        <div class="insight-card">
+          <span class="insight-label">单卡有效显存</span>
+          <span class="insight-value">{usable_vram_gib:.1f} GiB</span>
+          <span class="insight-meta">{gpu.gpu_name} × η_vram</span>
+        </div>
+        <div class="insight-card">
+          <span class="insight-label">显存占比</span>
+          <span class="insight-value">{required_gpu_ratio:.2f}</span>
+          <span class="insight-meta">向上取整前的原始比值</span>
+        </div>
+        <div class="insight-card is-emphasis">
+          <span class="insight-label">显存口径结果</span>
+          <span class="insight-value">{gpu_count_by_memory} 卡</span>
+          <span class="insight-meta">当前主结果直接采用它</span>
         </div>
       </div>
       <div class="memory-causality-shell">
@@ -606,8 +666,30 @@ def build_throughput_analysis_html(result: dict[str, Any]) -> str:
       <div class="step-header">
         <span class="step-number">2</span>
         <div>
-          <div class="step-title">吞吐必要条件与时延必要条件</div>
-          <div class="step-subtitle">{render_math_text("当前建议采购卡数只按显存约束给出；下面检查它是否与 Prefill / Decode 理论必要条件发生冲突")}</div>
+          <div class="step-title">吞吐与时延必要条件</div>
+          <div class="step-subtitle">{render_math_text("先看 Prefill / Decode 结论；公式和代入值放在展开项里")}</div>
+        </div>
+      </div>
+      <div class="insight-strip">
+        <div class="insight-card">
+          <span class="insight-label">当前显存基线</span>
+          <span class="insight-value">{result['business_gpu_count']} 卡</span>
+          <span class="insight-meta">所有必要条件都拿这条基线做对照</span>
+        </div>
+        <div class="insight-card {'is-ok' if result['prefill_necessity_met_at_baseline'] else 'is-warning'}">
+          <span class="insight-label">Prefill 检查</span>
+          <span class="insight-value">{'满足' if result['prefill_necessity_met_at_baseline'] else '不满足'}</span>
+          <span class="insight-meta">参考卡数 {result['prefill_gpu_count_by_throughput']} 卡</span>
+        </div>
+        <div class="insight-card {'is-ok' if result['decode_necessity_met_at_baseline'] else 'is-warning'}">
+          <span class="insight-label">Decode 检查</span>
+          <span class="insight-value">{'满足' if result['decode_necessity_met_at_baseline'] else '不满足'}</span>
+          <span class="insight-meta">参考卡数 {result['decode_gpu_count_by_throughput']} 卡</span>
+        </div>
+        <div class="insight-card">
+          <span class="insight-label">结果口径</span>
+          <span class="insight-value">只校验</span>
+          <span class="insight-meta">不会直接改动基线卡数</span>
         </div>
       </div>
       <div class="throughput-stage-grid">
@@ -624,43 +706,54 @@ def build_final_summary_html(result: dict[str, Any]) -> str:
     dominant = " · ".join(dominant_constraints)
     calc_sections = result.get("calculation_process_sections", [])
     section_html = render_calc_accordion("最终卡数与近似能力回推细节", calc_sections[3] if len(calc_sections) > 3 else None)
-    cost_html = ""
-    if result.get("estimated_total_cost") is not None:
-        cost_html = f"""
-        <div class="ha-detail-card">
-          <span class="ha-detail-label">估算总成本</span>
-          <span class="ha-detail-value">¥{result['estimated_total_cost']:,.0f}</span>
-          <span class="ha-detail-meta">单卡 ¥{result['unit_price']:,.0f}</span>
-        </div>
-        """
     return f"""
     <div class="step-section">
       <div class="step-header">
         <span class="step-number">3</span>
         <div>
-          <div class="step-title">最终卡数与近似能力回推</div>
-          <div class="step-subtitle">{render_math_text("先给出 G_req，再给出基于必要条件模型的总量近似回推")}</div>
+          <div class="step-title">基线结果与能力回推</div>
+          <div class="step-subtitle">{render_math_text("基线卡数来自显存约束；下方能力回推都是理论近似值")}</div>
         </div>
       </div>
-      <div class="decision-label">① 当前版本只按显存约束给采购基线</div>
-      <div class="constraint-grid">
-        <div class="constraint-card"><span class="constraint-title">采购基线</span><span class="constraint-value">{result['business_gpu_count']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">只由显存约束给出</span></div>
-        <div class="constraint-card"><span class="constraint-title">Prefill 参考</span><span class="constraint-value">{result['prefill_gpu_count_by_throughput']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">{'当前基线满足' if result['prefill_necessity_met_at_baseline'] else f'当前基线仍差 {result["prefill_necessity_gpu_gap"]} 卡'}</span></div>
-        <div class="constraint-card"><span class="constraint-title">Decode 参考</span><span class="constraint-value">{result['decode_gpu_count_by_throughput']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">{'当前基线满足' if result['decode_necessity_met_at_baseline'] else f'当前基线仍差 {result["decode_necessity_gpu_gap"]} 卡'}</span></div>
-      </div>
-      <div class="final-formula final-summary-card">
-        <div class="formula-term formula-result">
-          <span class="formula-label">建议采购</span>
-          <span class="formula-value">{result['business_gpu_count']} GPUs</span>
+      <div class="final-overview-shell">
+        <div class="final-summary-hero">
+          <span class="final-summary-kicker">预估基线</span>
+          <div class="final-summary-main">
+            <span class="final-summary-value">{result['business_gpu_count']}</span>
+            <span class="final-summary-unit">卡</span>
+          </div>
+          <span class="final-summary-note">基线只按显存约束给出；G_pre / G_dec 只作必要条件对照。</span>
+          <div class="final-logic-strip">
+            <span class="final-logic-chip">G_mem = {result['gpu_count_by_memory']} 卡</span>
+            <span class="final-logic-chip">G_pre = {result['prefill_gpu_count_by_throughput']} 卡</span>
+            <span class="final-logic-chip">G_dec = {result['decode_gpu_count_by_throughput']} 卡</span>
+          </div>
+        </div>
+        <div class="ha-detail-grid final-capacity-grid">
+          <div class="ha-detail-card"><span class="ha-detail-label">理论可持续 QPS</span><span class="ha-detail-value">{fmt_value(result['sustainable_qps_p95'], 2)} req/s</span><span class="ha-detail-meta">总量近似，不等于实测 SLA</span></div>
+          <div class="ha-detail-card"><span class="ha-detail-label">最大在途请求量</span><span class="ha-detail-value">{result['max_concurrency_by_memory_p95']}</span><span class="ha-detail-meta">显存口径上限</span></div>
+          <div class="ha-detail-card"><span class="ha-detail-label">理论 Prefill 总吞吐</span><span class="ha-detail-value">{fmt_compact(result['cluster_prefill_tps_capacity_p95'])}</span><span class="ha-detail-meta">基于当前基线线性回推</span></div>
+          <div class="ha-detail-card"><span class="ha-detail-label">理论 Decode 总吞吐</span><span class="ha-detail-value">{fmt_compact(result['cluster_decode_tps_capacity'])}</span><span class="ha-detail-meta">基于当前基线线性回推</span></div>
+          <div class="ha-detail-card"><span class="ha-detail-label">理论每日输出 token</span><span class="ha-detail-value">{fmt_compact(result['daily_decode_token_capacity_p95'])}</span><span class="ha-detail-meta">按 Decode 服务率近似回推</span></div>
+          <div class="ha-detail-card"><span class="ha-detail-label">理论每日输入 token</span><span class="ha-detail-value">{fmt_compact(result['daily_prefill_token_capacity_p95'])}</span><span class="ha-detail-meta">按 Prefill 服务率近似回推</span></div>
         </div>
       </div>
-      <div class="ha-detail-grid">
-        <div class="ha-detail-card"><span class="ha-detail-label">主导约束</span><span class="ha-detail-value">{escape(dominant)}</span><span class="ha-detail-meta">业务基线由谁决定</span></div>
-        <div class="ha-detail-card"><span class="ha-detail-label">理论可持续 QPS</span><span class="ha-detail-value">{fmt_value(result['sustainable_qps_p95'], 2)} req/s</span><span class="ha-detail-meta">基于必要条件模型的总量近似，不等于实测 SLA</span></div>
-        <div class="ha-detail-card"><span class="ha-detail-label">最大在途请求量</span><span class="ha-detail-value">{result['max_concurrency_by_memory_p95']}</span><span class="ha-detail-meta">显存口径</span></div>
-        <div class="ha-detail-card"><span class="ha-detail-label">理论每日输出 token</span><span class="ha-detail-value">{fmt_compact(result['daily_decode_token_capacity_p95'])}</span><span class="ha-detail-meta">按理论 Decode 服务率线性回推</span></div>
-        <div class="ha-detail-card"><span class="ha-detail-label">理论每日输入 token</span><span class="ha-detail-value">{fmt_compact(result['daily_prefill_token_capacity_p95'])}</span><span class="ha-detail-meta">按理论 Prefill 服务率线性回推</span></div>
-        {cost_html}
+      <div class="insight-strip insight-strip-secondary">
+        <div class="insight-card">
+          <span class="insight-label">主导约束</span>
+          <span class="insight-value">{escape(dominant)}</span>
+          <span class="insight-meta">当前基线由谁决定</span>
+        </div>
+        <div class="insight-card">
+          <span class="insight-label">Prefill 对照</span>
+          <span class="insight-value">{'满足' if result['prefill_necessity_met_at_baseline'] else '缺口'}</span>
+          <span class="insight-meta">{'当前基线已覆盖' if result['prefill_necessity_met_at_baseline'] else f'仍差 {result["prefill_necessity_gpu_gap"]} 卡'}</span>
+        </div>
+        <div class="insight-card">
+          <span class="insight-label">Decode 对照</span>
+          <span class="insight-value">{'满足' if result['decode_necessity_met_at_baseline'] else '缺口'}</span>
+          <span class="insight-meta">{'当前基线已覆盖' if result['decode_necessity_met_at_baseline'] else f'仍差 {result["decode_necessity_gpu_gap"]} 卡'}</span>
+        </div>
       </div>
       {section_html}
     </div>

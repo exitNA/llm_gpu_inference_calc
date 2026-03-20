@@ -53,51 +53,20 @@ def build_config_section_header_html(icon: str, title: str, description: str) ->
     """
 
 
-def build_traffic_playbook_html() -> str:
-    return """
-    <div class="traffic-playbook">
-      <div class="traffic-playbook-title">填写顺序</div>
-      <div class="traffic-playbook-grid">
-        <div class="traffic-playbook-card">
-          <span class="traffic-playbook-step">1</span>
-          <div>
-            <div class="traffic-playbook-label">先选流量来源</div>
-            <div class="traffic-playbook-copy">已有峰值 QPS 选“直接输入”；只有日调用量选“泊松反推”。</div>
-          </div>
-        </div>
-        <div class="traffic-playbook-card">
-          <span class="traffic-playbook-step">2</span>
-          <div>
-            <div class="traffic-playbook-label">再选在途口径</div>
-            <div class="traffic-playbook-copy">没有并发监控就用 Little；已有活跃请求监控再填峰值在途。</div>
-          </div>
-        </div>
-        <div class="traffic-playbook-card">
-          <span class="traffic-playbook-step">3</span>
-          <div>
-            <div class="traffic-playbook-label">最后填业务画像</div>
-            <div class="traffic-playbook-copy">不知道时先用默认：输入 3000、输出 1000、TTFT 3s、E2E 120s。</div>
-          </div>
-        </div>
-      </div>
-    </div>
-    """
-
-
 def build_traffic_mode_hint_html(qps_estimation_mode: str, concurrency_estimation_mode: str) -> str:
     if qps_estimation_mode == "direct_peak_qps":
-        qps_title = "当前按“直接输入峰值 QPS”工作"
-        qps_copy = "适合你已经有监控或压测峰值 QPS 的情况。只需要填峰值 QPS，不需要日调用量。"
+        qps_title = "峰值 QPS"
+        qps_copy = "已有监控或压测值时使用。"
     else:
-        qps_title = "当前按“泊松日均反推峰值 QPS”工作"
-        qps_copy = "适合你只有日调用量时使用。没有更细日志时，建议先用：高峰放大 200%、时间窗 10s、分位数 99%。"
+        qps_title = "Poisson 反推峰值 QPS"
+        qps_copy = "只有日调用量时使用。推荐先用 10s / 99%。"
 
     if concurrency_estimation_mode == "little_law":
-        conc_title = "当前按“Little 定律近似”估峰值在途"
-        conc_copy = "适合没有在线活跃请求监控时使用。通常先用安全系数 110%。"
+        conc_title = "Little 近似峰值在途"
+        conc_copy = "没有在线并发监控时使用。"
     else:
-        conc_title = "当前按“直接输入峰值在途请求量”工作"
-        conc_copy = "只有当你已经有网关、调度器或服务端的活跃请求峰值监控时，才建议选这个。"
+        conc_title = "直接输入峰值在途"
+        conc_copy = "已有活跃请求峰值监控时使用。"
 
     return f"""
     <div class="traffic-mode-hint">

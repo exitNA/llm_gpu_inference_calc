@@ -15,7 +15,10 @@ from ui.views import (
 
 from .constants import KV_TABLE_HEADERS, REQUEST_TABLE_HEADERS
 from .config import UIInputs
-from .runtime import build_config_section_header_html, build_traffic_mode_hint_html, build_traffic_playbook_html
+from .runtime import (
+    build_config_section_header_html,
+    build_traffic_mode_hint_html,
+)
 
 
 @dataclass(frozen=True)
@@ -67,7 +70,7 @@ def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
     with gr.Column(scale=4, min_width=320, elem_classes=["workspace-sidebar"]):
         with gr.Group(elem_classes=["config-panel"]):
             with gr.Group(elem_classes=["config-section", "config-section-model"]):
-                gr.HTML(build_config_section_header_html("🧠", "模型配置", "模型选择与显存附加系数"))
+                gr.HTML(build_config_section_header_html("🧠", "步骤 1 · 模型与权重", "模型、权重精度和显存附加系数。"))
                 model_dropdown = gr.Dropdown(
                     label="选择模型",
                     choices=get_model_choices(),
@@ -79,6 +82,7 @@ def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
                     step=1,
                     label="权重附加系数 α_w (%)",
                     value=defaults.weight_overhead_ratio,
+                    elem_classes=["compact-slider"],
                 )
                 runtime_overhead_ratio = gr.Slider(
                     minimum=0,
@@ -86,10 +90,11 @@ def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
                     step=1,
                     label="运行时固定显存系数 α_r (%)",
                     value=defaults.runtime_overhead_ratio,
+                    elem_classes=["compact-slider"],
                 )
 
             with gr.Group(elem_classes=["config-section", "config-section-gpu"]):
-                gr.HTML(build_config_section_header_html("🖥️", "显卡配置", "GPU 规格与效率系数"))
+                gr.HTML(build_config_section_header_html("🖥️", "步骤 2 · GPU 与精度", "GPU、KV cache 精度和效率系数。"))
                 gpu_preset_key = gr.Dropdown(
                     label="选择显卡",
                     choices=get_gpu_choices(),
@@ -114,6 +119,7 @@ def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
                     step=1,
                     label="可用显存比例 η_vram (%)",
                     value=defaults.usable_vram_ratio,
+                    elem_classes=["compact-slider"],
                 )
                 bandwidth_efficiency = gr.Slider(
                     minimum=10,
@@ -121,6 +127,7 @@ def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
                     step=1,
                     label="带宽利用率 η_bw (%)",
                     value=defaults.bandwidth_efficiency,
+                    elem_classes=["compact-slider"],
                 )
                 compute_efficiency = gr.Slider(
                     minimum=10,
@@ -128,17 +135,18 @@ def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
                     step=1,
                     label="算力利用率 η_cmp (%)",
                     value=defaults.compute_efficiency,
+                    elem_classes=["compact-slider"],
                 )
 
             with gr.Group(elem_classes=["config-section", "config-section-traffic"]):
                 gr.HTML(
                     build_config_section_header_html(
                         "🚦",
-                        "业务目标",
-                        "按“流量来源 → 在途口径 → 请求画像”分步骤填写，界面只显示当前模式真正需要的字段。",
+                        "步骤 3 · 业务目标",
+                        "流量、在途和请求画像。",
                     )
                 )
-                traffic_playbook_html = gr.HTML(build_traffic_playbook_html())
+                traffic_playbook_html = gr.HTML("", visible=False)
                 qps_estimation_mode = gr.Radio(
                     label="第 1 步：流量来源",
                     choices=[
@@ -162,8 +170,8 @@ def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
                         """
                         <div class="traffic-subsection-head">
                           <div class="traffic-subsection-kicker">峰值请求率</div>
-                          <div class="traffic-subsection-title">你已经有峰值监控或压测结果</div>
-                          <div class="traffic-subsection-copy">直接填写模型调用层面的峰值 QPS。若这是用户请求 QPS，请先折算成模型调用 QPS。</div>
+                          <div class="traffic-subsection-title">已有峰值监控或压测值</div>
+                          <div class="traffic-subsection-copy">填写模型调用层面的峰值 QPS。</div>
                         </div>
                         """
                     )
@@ -182,8 +190,8 @@ def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
                         """
                         <div class="traffic-subsection-head">
                           <div class="traffic-subsection-kicker">日调用量反推峰值</div>
-                          <div class="traffic-subsection-title">你没有峰值 QPS，但有日调用量</div>
-                          <div class="traffic-subsection-copy">系统会用 Poisson 分位数从日调用量反推 sizing 使用的峰值 QPS。没有更细日志时，建议先试：高峰放大 200%、时间窗 10s、分位数 99%。</div>
+                          <div class="traffic-subsection-title">没有峰值 QPS，只有日调用量</div>
+                          <div class="traffic-subsection-copy">系统会用 Poisson 分位数反推峰值 QPS。</div>
                         </div>
                         """
                     )
@@ -230,8 +238,8 @@ def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
                         """
                         <div class="traffic-subsection-head">
                           <div class="traffic-subsection-kicker">Little 定律近似</div>
-                          <div class="traffic-subsection-title">适合大多数还没有在线并发监控的场景</div>
-                          <div class="traffic-subsection-copy">系统会按“峰值 QPS × E2E × 安全系数”估算峰值在途请求量。默认先用 110% 安全系数即可。</div>
+                          <div class="traffic-subsection-title">没有在线并发监控时使用</div>
+                          <div class="traffic-subsection-copy">按“峰值 QPS × E2E × 安全系数”估算峰值在途。</div>
                         </div>
                         """
                     )
@@ -250,8 +258,8 @@ def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
                         """
                         <div class="traffic-subsection-head">
                           <div class="traffic-subsection-kicker">直接输入峰值在途</div>
-                          <div class="traffic-subsection-title">适合你已经有服务端活跃请求监控</div>
-                          <div class="traffic-subsection-copy">直接填写系统峰值时刻同时挂着的请求量。没有这类监控时，不建议选这个模式。</div>
+                          <div class="traffic-subsection-title">已有活跃请求峰值监控</div>
+                          <div class="traffic-subsection-copy">直接填写峰值时刻的在途请求量。</div>
                         </div>
                         """
                     )
@@ -266,8 +274,8 @@ def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
                     """
                     <div class="traffic-subsection-head traffic-subsection-head-profile">
                       <div class="traffic-subsection-kicker">第 3 步：请求画像与时延目标</div>
-                      <div class="traffic-subsection-title">不知道怎么填时，先用默认业务画像</div>
-                      <div class="traffic-subsection-copy">默认值对应“长上下文 + 长输出”的保守在线问答口径。若你的业务更轻，请把输入/输出长度调低，否则会明显高估卡数。</div>
+                      <div class="traffic-subsection-title">没有更细数据时先用默认画像</div>
+                      <div class="traffic-subsection-copy">业务更轻时，把输入/输出长度调低。</div>
                       <div class="traffic-profile-strip">
                         <span class="traffic-profile-pill">轻问答: 输入 500 / 输出 200</span>
                         <span class="traffic-profile-pill">中等分析: 输入 1000 / 输出 300</span>
