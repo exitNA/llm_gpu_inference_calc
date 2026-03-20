@@ -52,17 +52,20 @@
   font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif !important;
   color: var(--c-text-primary);
   -webkit-font-smoothing: antialiased;
+  overflow-x: hidden !important;
 }
 
 .workspace-main {
   gap: 20px !important;
   align-items: flex-start !important;
+  flex-wrap: wrap !important;
 }
 
 .workspace-sidebar,
 .workspace-content {
   gap: 16px !important;
   background: transparent !important;
+  min-width: 0 !important;
 }
 
 /* ─── Step Section ─── */
@@ -2477,6 +2480,7 @@
   .shape-grid {
     flex-direction: column !important;
   }
+
 }
 
 @media (max-width: 640px) {

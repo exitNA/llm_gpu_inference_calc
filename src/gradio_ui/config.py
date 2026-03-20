@@ -17,6 +17,7 @@ from presets import (
 class UIInputs:
     model_dropdown: str
     precision_override: str
+    kv_cache_dtype: str
     gpu_preset_key: str
     qps_estimation_mode: str
     lambda_peak_qps: float
@@ -43,6 +44,7 @@ class UIInputs:
         return cls(
             model_dropdown=get_default_model_key(),
             precision_override="fp8",
+            kv_cache_dtype="fp16",
             gpu_preset_key=get_default_gpu_key(),
             qps_estimation_mode="poisson_from_daily_requests",
             lambda_peak_qps=profile.lambda_peak_qps,
@@ -68,6 +70,7 @@ class UIInputs:
         return (
             self.model_dropdown,
             self.precision_override,
+            self.kv_cache_dtype,
             self.gpu_preset_key,
             self.qps_estimation_mode,
             self.lambda_peak_qps,
@@ -151,7 +154,7 @@ class UIInputs:
         base_gpu = get_gpu_preset(str(self.gpu_preset_key)).config
 
         target_prec = str(self.precision_override).lower()
-        target_kv = "fp8" if target_prec == "fp8" else "fp16"
+        target_kv = str(self.kv_cache_dtype).lower()
 
         traffic = TrafficConfig(
             lambda_peak_qps=lambda_peak_qps_value,

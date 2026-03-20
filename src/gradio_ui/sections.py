@@ -22,6 +22,7 @@ from .runtime import build_config_section_header_html, build_traffic_mode_hint_h
 class SidebarComponents:
     model_dropdown: Any
     precision_dropdown: Any
+    kv_cache_dtype_dropdown: Any
     gpu_preset_key: Any
     traffic_playbook_html: Any
     traffic_mode_hint_html: Any
@@ -63,7 +64,7 @@ class ResultComponents:
 
 
 def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
-    with gr.Column(scale=4, min_width=420, elem_classes=["workspace-sidebar"]):
+    with gr.Column(scale=4, min_width=320, elem_classes=["workspace-sidebar"]):
         with gr.Group(elem_classes=["config-panel"]):
             with gr.Group(elem_classes=["config-section", "config-section-model"]):
                 gr.HTML(build_config_section_header_html("🧠", "模型配置", "模型选择与显存附加系数"))
@@ -96,8 +97,15 @@ def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
                 )
                 precision_dropdown = gr.Radio(
                     label="推理精度",
-                    choices=["fp8", "fp16", "bf16"],
+                    choices=["int4", "int8", "fp8", "fp16", "bf16"],
                     value=defaults.precision_override,
+                    elem_classes=["compact-radio"],
+                )
+                kv_cache_dtype_dropdown = gr.Radio(
+                    label="KV Cache 精度",
+                    choices=["int4", "int8", "fp8", "fp16", "bf16"],
+                    value=defaults.kv_cache_dtype,
+                    info="默认 FP16；该参数单独控制 KV cache 显存字节数。",
                     elem_classes=["compact-radio"],
                 )
                 usable_vram_ratio = gr.Slider(
@@ -301,6 +309,7 @@ def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
     return SidebarComponents(
         model_dropdown=model_dropdown,
         precision_dropdown=precision_dropdown,
+        kv_cache_dtype_dropdown=kv_cache_dtype_dropdown,
         gpu_preset_key=gpu_preset_key,
         traffic_playbook_html=traffic_playbook_html,
         traffic_mode_hint_html=traffic_mode_hint_html,
@@ -332,7 +341,7 @@ def build_sidebar(gr, defaults: UIInputs) -> SidebarComponents:
 
 def build_results_panel(gr, default_result: dict[str, Any] | None = None) -> ResultComponents:
     initial_result = default_result or {}
-    with gr.Column(scale=8, min_width=860, elem_classes=["workspace-content"]):
+    with gr.Column(scale=8, min_width=0, elem_classes=["workspace-content"]):
         overview_html = gr.HTML(value="" if default_result is None else build_overview_html(initial_result))
         memory_html = gr.HTML(value="" if default_result is None else build_memory_analysis_html(initial_result))
         throughput_html = gr.HTML(value="" if default_result is None else build_throughput_analysis_html(initial_result))

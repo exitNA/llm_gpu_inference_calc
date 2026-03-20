@@ -23,6 +23,10 @@ def update_precision_choices(gpu_preset_key: str, current_precision: str):
     gr = import_gradio()
     gpu = get_gpu_preset(gpu_preset_key).config
     choices = []
+    if gpu.int4_tflops is not None or gpu.int8_tflops is not None:
+        choices.append("int4")
+    if gpu.int8_tflops is not None:
+        choices.append("int8")
     if gpu.fp8_tflops is not None:
         choices.append("fp8")
     if gpu.fp16_tflops is not None:
@@ -32,7 +36,7 @@ def update_precision_choices(gpu_preset_key: str, current_precision: str):
     if not choices:
         choices = ["fp16", "bf16"]
     value = current_precision if current_precision in choices else choices[-1]
-    return gr.Dropdown(choices=choices, value=value)
+    return gr.update(choices=choices, value=value)
 
 
 def build_config_section_header_html(icon: str, title: str, description: str) -> str:

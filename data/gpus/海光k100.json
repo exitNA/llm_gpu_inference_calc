@@ -1,0 +1,9 @@
+{
+    "gpu_name": "海光 K100_AI 64GB",
+    "vram_gb": 64,
+    "memory_bandwidth_gb_per_sec": 896,
+    "fp32_tflops": 49,
+    "fp16_tflops": 196,
+    "bf16_tflops": 196,
+    "int8_tflops": 392
+}

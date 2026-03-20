@@ -11,6 +11,7 @@ def bind_events(*, sidebar: SidebarComponents, results: ResultComponents, demo: 
     inputs = [
         sidebar.model_dropdown,
         sidebar.precision_dropdown,
+        sidebar.kv_cache_dtype_dropdown,
         sidebar.gpu_preset_key,
         sidebar.qps_estimation_mode,
         sidebar.lambda_peak_qps,

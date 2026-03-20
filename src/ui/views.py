@@ -123,6 +123,58 @@ def _render_tp_proof_card(step: dict[str, Any] | None) -> str:
     """
 
 
+def _render_calc_graph_node(
+    *,
+    title: str,
+    value: str,
+    formula: str,
+    detail: str,
+    kind: str = "derived",
+    downstream: list[str] | None = None,
+) -> str:
+    downstream_html = ""
+    if downstream:
+        chips = "".join(f'<span class="calc-graph-chip">{escape(item)}</span>' for item in downstream)
+        downstream_html = f"""
+        <div class="calc-graph-node-footer">
+          <span class="calc-graph-footer-label">影响下游</span>
+          <div class="calc-graph-chip-row">{chips}</div>
+        </div>
+        """
+    return f"""
+    <div class="calc-graph-node calc-graph-node-{kind}">
+      <div class="calc-graph-node-top">
+        <span class="calc-graph-node-title">{render_math_text(title)}</span>
+        <span class="calc-graph-node-value">{escape(value)}</span>
+      </div>
+      <div class="calc-graph-node-formula">{render_math_text(formula)}</div>
+      <div class="calc-graph-node-detail">{render_math_text(detail)}</div>
+      {downstream_html}
+    </div>
+    """
+
+
+def _render_calc_graph_step_node(
+    *,
+    sections: list[dict[str, Any] | None],
+    label: str,
+    kind: str,
+    downstream: list[str] | None = None,
+) -> str:
+    step = _find_calc_step_in_sections(sections, label)
+    if not step:
+        return ""
+    formula_text = step.get("formula_note") or step["formula"]
+    return _render_calc_graph_node(
+        title=step["label"],
+        value=step["result"],
+        formula=formula_text,
+        detail=step["substitution"],
+        kind=kind,
+        downstream=downstream,
+    )
+
+
 def _render_tp_stage_shell(
     *,
     stage_key: str,

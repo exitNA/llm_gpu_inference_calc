@@ -1,0 +1,9 @@
+{
+    "gpu_name": "沐曦 曦云C500 64GB",
+    "vram_gb": 64,
+    "memory_bandwidth_gb_per_sec": 896,
+    "fp32_tflops": 140,
+    "fp16_tflops": 280,
+    "bf16_tflops": 280,
+    "int8_tflops": 560
+}
