@@ -3,7 +3,6 @@ from __future__ import annotations
 from typing import Any
 
 from .calculations import (
-    determine_dominant_constraints,
     estimate_activated_params_billion,
     estimate_capacity_backprojection,
     estimate_memory_based_gpu_count,
@@ -29,12 +28,7 @@ def evaluate_single_model(
     memory_info = estimate_memory_based_gpu_count(model, traffic, gpu, runtime)
     throughput_info = estimate_throughput_based_gpu_count(model, traffic, gpu, runtime)
 
-    candidate_counts = [int(memory_info["gpu_count_by_memory"])]
-    if throughput_info["prefill_gpu_count_by_throughput"] is not None:
-        candidate_counts.append(int(throughput_info["prefill_gpu_count_by_throughput"]))
-    if throughput_info["decode_gpu_count_by_throughput"] is not None:
-        candidate_counts.append(int(throughput_info["decode_gpu_count_by_throughput"]))
-    business_gpu_count = max(candidate_counts)
+    business_gpu_count = int(memory_info["gpu_count_by_memory"])
 
     capacity_info = estimate_capacity_backprojection(
         traffic=traffic,
@@ -43,12 +37,13 @@ def evaluate_single_model(
         business_gpu_count=business_gpu_count,
     )
 
-    dominant_constraints = determine_dominant_constraints(
-        gpu_count_by_memory=int(memory_info["gpu_count_by_memory"]),
-        g_pre=throughput_info["prefill_gpu_count_by_throughput"],
-        g_dec=throughput_info["decode_gpu_count_by_throughput"],
-        business_gpu_count=business_gpu_count,
-    )
+    dominant_constraints = ["显存"]
+    prefill_reference = throughput_info["prefill_gpu_count_by_throughput"]
+    decode_reference = throughput_info["decode_gpu_count_by_throughput"]
+    prefill_necessity_met = prefill_reference is None or business_gpu_count >= int(prefill_reference)
+    decode_necessity_met = decode_reference is None or business_gpu_count >= int(decode_reference)
+    prefill_necessity_gap = 0 if prefill_reference is None else max(int(prefill_reference) - business_gpu_count, 0)
+    decode_necessity_gap = 0 if decode_reference is None else max(int(decode_reference) - business_gpu_count, 0)
 
     estimated_total_cost = None
     if gpu.unit_price is not None:
@@ -87,6 +82,11 @@ def evaluate_single_model(
         "g_decode": throughput_info["decode_gpu_count_by_throughput"],
         "g_biz": business_gpu_count,
         "business_gpu_count": business_gpu_count,
+        "procurement_basis": "memory_only",
+        "prefill_necessity_met_at_baseline": prefill_necessity_met,
+        "decode_necessity_met_at_baseline": decode_necessity_met,
+        "prefill_necessity_gpu_gap": prefill_necessity_gap,
+        "decode_necessity_gpu_gap": decode_necessity_gap,
         "estimated_total_cost": estimated_total_cost,
         "unit_price": gpu.unit_price,
         "qps_model_label": throughput_info["qps_model_label"],
@@ -129,22 +129,22 @@ def format_result_text(result: dict[str, Any]) -> str:
         "=" * 88,
         "",
         "[主结果]",
-        f"- G_req / 业务基线: {result['business_gpu_count']} 卡",
+        f"- G_req / 业务基线: {result['business_gpu_count']} 卡 (当前版本按显存约束给出)",
         f"- 主导约束: {' / '.join(result['dominant_constraints'])}",
         f"- 峰值 QPS 口径: {result['qps_model_label']} -> {format_calc_number(result['lambda_peak_qps_effective'])} req/s",
         f"- 在途口径: {result['concurrency_model_label']} -> {format_calc_number(result['c_peak_budget'])} req",
         "",
         "[约束拆解]",
         f"- G_mem: {result['gpu_count_by_memory']}",
-        f"- G_pre: {result['prefill_gpu_count_by_throughput']}",
-        f"- G_dec: {result['decode_gpu_count_by_throughput']}",
+        f"- G_pre 理论参考: {result['prefill_gpu_count_by_throughput']} ({'当前基线满足' if result['prefill_necessity_met_at_baseline'] else '当前基线不满足'})",
+        f"- G_dec 理论参考: {result['decode_gpu_count_by_throughput']} ({'当前基线满足' if result['decode_necessity_met_at_baseline'] else '当前基线不满足'})",
         f"- Prefill 时延必要条件: {'满足' if result['prefill_latency_ok'] else '不满足'}",
         f"- Decode 时延必要条件: {'满足' if result['decode_latency_ok'] else '不满足'}",
         "",
-        "[能力回推]",
-        f"- 保守可持续 QPS: {format_calc_number(result['sustainable_qps_p95'])} req/s",
-        f"- 保守每日 Prefill token: {format_adaptive_token_volume(result['daily_prefill_token_capacity_p95'])}",
-        f"- 保守每日 Decode token: {format_adaptive_token_volume(result['daily_decode_token_capacity_p95'])}",
+        "[近似能力回推]",
+        f"- 理论保守可持续 QPS: {format_calc_number(result['sustainable_qps_p95'])} req/s",
+        f"- 理论保守每日 Prefill token: {format_adaptive_token_volume(result['daily_prefill_token_capacity_p95'])}",
+        f"- 理论保守每日 Decode token: {format_adaptive_token_volume(result['daily_decode_token_capacity_p95'])}",
         f"- 显存最大在途请求量(P95): {result['max_concurrency_by_memory_p95']}",
         f"- 时延风险: {result['latency_risk_level']} ({result['latency_risk_note']})",
         "",

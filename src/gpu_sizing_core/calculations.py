@@ -379,10 +379,10 @@ def estimate_capacity_backprojection(
         latency_note = "单卡时延必要条件不满足，仅增加总卡数通常无法直接解决时延目标。"
     elif lambda_p95 is not None and float(throughput_info["lambda_peak_qps_effective"]) >= lambda_p95 * 0.9:
         latency_risk = "medium"
-        latency_note = "总量能力接近保守可持续 QPS，上线后排队与调度可能放大实际时延。"
+        latency_note = "总量运行点接近理论保守可持续 QPS，上线后排队与调度可能放大实际时延。"
     else:
         latency_risk = "low"
-        latency_note = "单卡时延必要条件满足，且峰值流量低于保守可持续 QPS。"
+        latency_note = "单卡时延必要条件满足，且峰值流量低于理论保守可持续 QPS。"
 
     return {
         "cluster_prefill_tps_capacity_p95": prefill_cap_p95,

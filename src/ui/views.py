@@ -32,6 +32,213 @@ def _precision_unit_label(precision: str) -> str:
     }
     return mapping.get(precision.lower(), precision)
 
+
+def _find_calc_step(section: dict[str, Any] | None, label: str) -> dict[str, Any] | None:
+    if not section:
+        return None
+    for step in section.get("steps", []):
+        if step.get("label") == label:
+            return step
+    return None
+
+
+def _find_calc_step_in_sections(sections: list[dict[str, Any] | None], label: str) -> dict[str, Any] | None:
+    for section in sections:
+        step = _find_calc_step(section, label)
+        if step:
+            return step
+    return None
+
+
+def _render_tp_basis_item(step: dict[str, Any] | None) -> str:
+    if not step:
+        return ""
+
+    note_html = ""
+    if step.get("note"):
+        note_html = f"""
+        <div class="tp-basis-note">
+          <span class="tp-basis-kicker">说明</span>
+          <span class="tp-basis-text">{render_math_text(step["note"])}</span>
+        </div>
+        """
+
+    return f"""
+    <div class="tp-basis-item">
+      <div class="tp-basis-topline">
+        <span class="tp-basis-label">{render_math_text(step["label"])}</span>
+        <span class="tp-basis-result">{escape(step["result"])}</span>
+      </div>
+      <div class="tp-basis-line">
+        <span class="tp-basis-kicker">公式</span>
+        <span class="tp-basis-text">{render_math_text(step["formula"])}</span>
+      </div>
+      <div class="tp-basis-line">
+        <span class="tp-basis-kicker">代入</span>
+        <span class="tp-basis-text">{render_math_text(step["substitution"])}</span>
+      </div>
+      {note_html}
+    </div>
+    """
+
+
+def _render_tp_basis_block(sections: list[dict[str, Any] | None], labels: list[str]) -> str:
+    items_html = "".join(_render_tp_basis_item(_find_calc_step_in_sections(sections, label)) for label in labels)
+    if not items_html:
+        return ""
+    return f"""
+    <div class="tp-basis-block">
+      <div class="tp-basis-heading">数据计算依据</div>
+      {items_html}
+    </div>
+    """
+
+
+def _format_stage_ratio(numerator: float | None, denominator: float | None) -> str:
+    if numerator is None or denominator is None or denominator <= 0:
+        return "-"
+    return f"{numerator / denominator:.0%}"
+
+
+def _format_signed_tps_gap(value: float | None) -> str:
+    if value is None:
+        return "-"
+    sign = "+" if value >= 0 else "-"
+    return f"{sign}{fmt_compact(abs(value))} tok/s"
+
+
+def _render_tp_proof_card(step: dict[str, Any] | None) -> str:
+    if not step:
+        return ""
+    human_formula = step.get("formula_note") or step["formula"]
+    return f"""
+    <div class="tp-proof-card">
+      <div class="tp-proof-topline">
+        <span class="tp-proof-label">{render_math_text(step["label"])}</span>
+        <span class="tp-proof-value">{escape(step["result"])}</span>
+      </div>
+      <div class="tp-proof-formula">{render_math_text(human_formula)}</div>
+      <div class="tp-proof-sub">{render_math_text(step["substitution"])}</div>
+    </div>
+    """
+
+
+def _render_tp_stage_shell(
+    *,
+    stage_key: str,
+    stage_title: str,
+    badge_text: str,
+    badge_class: str,
+    result: dict[str, Any],
+    sections: list[dict[str, Any] | None],
+    workload_label: str,
+    service_label: str,
+    reference_label: str,
+    latency_label: str,
+    workload_key: str,
+    cluster_capacity_key: str,
+    reference_count_key: str,
+    necessity_ok_key: str,
+    necessity_gap_key: str,
+    latency_ok_key: str,
+) -> str:
+    workload = result.get(workload_key)
+    cluster_capacity = result.get(cluster_capacity_key)
+    reference_count = result.get(reference_count_key)
+    baseline_count = result["business_gpu_count"]
+    necessity_ok = bool(result[necessity_ok_key])
+    latency_ok = bool(result[latency_ok_key])
+    gap_gpus = result[necessity_gap_key]
+    capacity_ratio = _format_stage_ratio(cluster_capacity, workload)
+    capacity_gap_text = _format_signed_tps_gap(None if workload is None or cluster_capacity is None else cluster_capacity - workload)
+    latency_text = "满足" if latency_ok else "不满足"
+    necessity_text = "满足" if necessity_ok else "不满足"
+    status_class = "is-ok" if necessity_ok else "is-risk"
+
+    if necessity_ok:
+        summary = (
+            f"当前建议采购 {baseline_count} 张卡时，该阶段的理论总服务率约为 "
+            f"{fmt_compact(cluster_capacity)} tok/s，已经覆盖目标工作量 {fmt_compact(workload)} tok/s。"
+        )
+    else:
+        summary = (
+            f"当前建议采购 {baseline_count} 张卡时，该阶段的理论总服务率约为 "
+            f"{fmt_compact(cluster_capacity)} tok/s，仍低于目标工作量 {fmt_compact(workload)} tok/s。"
+        )
+
+    summary += " 这里的卡数只作必要条件参考，不会直接抬高采购主结果。"
+
+    proof_html = "".join(
+        [
+            _render_tp_proof_card(_find_calc_step_in_sections(sections, workload_label)),
+            _render_tp_proof_card(_find_calc_step_in_sections(sections, service_label)),
+            _render_tp_proof_card(_find_calc_step_in_sections(sections, reference_label)),
+            _render_tp_proof_card(_find_calc_step_in_sections(sections, latency_label)),
+        ]
+    )
+
+    return f"""
+    <div class="throughput-shell throughput-shell-{stage_key}">
+      <div class="throughput-spotlight throughput-spotlight-{stage_key}">
+        <div class="tp-card-header">
+          <span class="tp-card-title">{stage_title}</span>
+          <span class="tp-badge {badge_class}">{badge_text}</span>
+        </div>
+        <span class="memory-result-kicker">理论参考卡数</span>
+        <div class="memory-result-main">
+          <span class="memory-result-value">{reference_count}</span>
+          <span class="memory-result-unit">GPUs</span>
+        </div>
+        <span class="memory-result-caption">只用于必要条件参考，不直接并入采购主结果</span>
+        <div class="memory-result-proof">
+          <span class="memory-result-formula">当前显存基线 {baseline_count} 张，{'已覆盖' if necessity_ok else f'仍差 {gap_gpus} 张'}</span>
+          <span class="memory-result-note">目标工作量与单卡理论服务率反推得到该阶段的参考卡数。</span>
+        </div>
+        <div class="memory-result-stats">
+          <div class="memory-result-stat">
+            <span class="memory-result-stat-label">当前显存基线</span>
+            <span class="memory-result-stat-value">{baseline_count} 卡</span>
+          </div>
+          <div class="memory-result-stat">
+            <span class="memory-result-stat-label">当前总理论服务率</span>
+            <span class="memory-result-stat-value">{fmt_compact(cluster_capacity)} tok/s</span>
+          </div>
+          <div class="memory-result-stat">
+            <span class="memory-result-stat-label">相对目标</span>
+            <span class="memory-result-stat-value">{capacity_ratio} · {capacity_gap_text}</span>
+          </div>
+          <div class="memory-result-stat">
+            <span class="memory-result-stat-label">时延必要条件</span>
+            <span class="memory-result-stat-value">{latency_text}</span>
+          </div>
+        </div>
+      </div>
+      <div class="throughput-cause-cluster">
+        <div class="memory-cause-heading">
+          <span class="memory-cause-kicker">{stage_title} 必要条件结论</span>
+          <span class="memory-cause-summary">{summary}</span>
+        </div>
+        <div class="throughput-status-strip {status_class}">
+          <div class="throughput-status-item">
+            <span class="throughput-status-label">必要条件结果</span>
+            <span class="throughput-status-value">{necessity_text}</span>
+          </div>
+          <div class="throughput-status-item">
+            <span class="throughput-status-label">目标工作量</span>
+            <span class="throughput-status-value">{fmt_compact(workload)} tok/s</span>
+          </div>
+          <div class="throughput-status-item">
+            <span class="throughput-status-label">理论总服务率</span>
+            <span class="throughput-status-value">{fmt_compact(cluster_capacity)} tok/s</span>
+          </div>
+        </div>
+        <div class="throughput-proof-grid">
+          {proof_html}
+        </div>
+      </div>
+    </div>
+    """
+
 def build_request_detail_rows(result: dict[str, Any]) -> list[list[str]]:
     rows = []
     for item in result.get("request_profile_rows", []):
@@ -81,7 +288,7 @@ def build_overview_html(result: dict[str, Any]) -> str:
           <div class="hero-model-name-large">{escape(result['model_name'])}</div>
           <div class="hero-tag-row">
             <span class="hero-constraint constraint-throughput">{escape(dominant)}</span>
-            <span class="hero-strategy-tag">显存、输入吞吐、输出吞吐三类约束取最大值</span>
+            <span class="hero-strategy-tag">主结果按显存给出；吞吐与时延只做必要条件检查</span>
           </div>
         </div>
       </div>
@@ -142,7 +349,7 @@ def build_overview_html(result: dict[str, Any]) -> str:
             <span class="result-item-label">主结果</span>
             <div class="result-item-content">
               <span class="result-item-value-compact">{result['business_gpu_count']} GPUs</span>
-              <span class="result-item-sub">建议采购卡数下界</span>
+              <span class="result-item-sub">当前版本按显存约束给采购基线</span>
             </div>
           </div>
           <div class="result-item-row">
@@ -302,48 +509,58 @@ def build_memory_analysis_html(result: dict[str, Any]) -> str:
 
 
 def build_throughput_analysis_html(result: dict[str, Any]) -> str:
-    prefill_ok = "满足" if result["prefill_latency_ok"] else "不满足"
-    decode_ok = "满足" if result["decode_latency_ok"] else "不满足"
     calc_sections = result.get("calculation_process_sections", [])
-    section_html = render_calc_accordion("吞吐与时延必要条件细节", calc_sections[2] if len(calc_sections) > 2 else None)
+    workload_section = calc_sections[0] if len(calc_sections) > 0 else None
+    throughput_section = calc_sections[2] if len(calc_sections) > 2 else None
+    section_html = render_calc_accordion("吞吐必要条件与时延必要条件细节", throughput_section)
+    prefill_stage_html = _render_tp_stage_shell(
+        stage_key="prefill",
+        stage_title="Prefill",
+        badge_text="输入阶段",
+        badge_class="tp-badge-prefill",
+        result=result,
+        sections=[workload_section, throughput_section],
+        workload_label="峰值 Prefill 工作量",
+        service_label="单卡 Prefill 理论服务率",
+        reference_label="Prefill 理论参考卡数 G_pre",
+        latency_label="Prefill 时延必要条件",
+        workload_key="tps_pre_target_peak",
+        cluster_capacity_key="cluster_prefill_tps_capacity_p95",
+        reference_count_key="prefill_gpu_count_by_throughput",
+        necessity_ok_key="prefill_necessity_met_at_baseline",
+        necessity_gap_key="prefill_necessity_gpu_gap",
+        latency_ok_key="prefill_latency_ok",
+    )
+    decode_stage_html = _render_tp_stage_shell(
+        stage_key="decode",
+        stage_title="Decode",
+        badge_text="输出阶段",
+        badge_class="tp-badge-decode",
+        result=result,
+        sections=[workload_section, throughput_section],
+        workload_label="峰值 Decode 工作量",
+        service_label="单卡 Decode 理论服务率",
+        reference_label="Decode 理论参考卡数 G_dec",
+        latency_label="Decode 时延必要条件",
+        workload_key="tps_dec_target_peak",
+        cluster_capacity_key="cluster_decode_tps_capacity",
+        reference_count_key="decode_gpu_count_by_throughput",
+        necessity_ok_key="decode_necessity_met_at_baseline",
+        necessity_gap_key="decode_necessity_gpu_gap",
+        latency_ok_key="decode_latency_ok",
+    )
     return f"""
     <div class="step-section">
       <div class="step-header">
         <span class="step-number">2</span>
         <div>
-          <div class="step-title">吞吐与时延必要条件</div>
-          <div class="step-subtitle">{render_math_text("目标 token 工作量决定 G_pre / G_dec，时延只做单卡必要条件检查")}</div>
+          <div class="step-title">吞吐必要条件与时延必要条件</div>
+          <div class="step-subtitle">{render_math_text("当前建议采购卡数只按显存约束给出；下面检查它是否与 Prefill / Decode 理论必要条件发生冲突")}</div>
         </div>
       </div>
-      <div class="throughput-grid">
-        <div class="tp-card">
-          <div class="tp-card-header">
-            <span class="tp-card-title">Prefill</span>
-            <span class="tp-badge tp-badge-prefill">输入阶段</span>
-          </div>
-          <div class="tp-metric-stack">
-            <div class="tp-metric-row"><span class="tp-metric-label">目标工作量</span><span class="tp-metric-value">{fmt_compact(result['tps_pre_target_peak'])} tok/s</span></div>
-            <div class="tp-metric-row"><span class="tp-metric-label">带宽上界</span><span class="tp-metric-value">{fmt_compact(result['prefill_tps_p95_bw_limited'])} tok/s</span></div>
-            <div class="tp-metric-row"><span class="tp-metric-label">算力上界</span><span class="tp-metric-value">{fmt_compact(result['prefill_tps_p95_compute_limited'])} tok/s</span></div>
-            <div class="tp-metric-row"><span class="tp-metric-label">单卡吞吐</span><span class="tp-metric-value">{fmt_compact(result['prefill_tps_p95_card'])} tok/s</span></div>
-          </div>
-          <div class="tp-result"><span class="tp-result-label">卡数下界</span><span class="tp-result-value">{result['prefill_gpu_count_by_throughput']}</span></div>
-          <div class="tp-result" style="margin-top:10px;"><span class="tp-result-label">TTFT 检查</span><span class="tp-result-value">{prefill_ok}</span></div>
-        </div>
-        <div class="tp-card">
-          <div class="tp-card-header">
-            <span class="tp-card-title">Decode</span>
-            <span class="tp-badge tp-badge-decode">输出阶段</span>
-          </div>
-          <div class="tp-metric-stack">
-            <div class="tp-metric-row"><span class="tp-metric-label">目标工作量</span><span class="tp-metric-value">{fmt_compact(result['tps_dec_target_peak'])} tok/s</span></div>
-            <div class="tp-metric-row"><span class="tp-metric-label">带宽上界</span><span class="tp-metric-value">{fmt_compact(result['decode_tps_bw_limited'])} tok/s</span></div>
-            <div class="tp-metric-row"><span class="tp-metric-label">算力上界</span><span class="tp-metric-value">{fmt_compact(result['decode_tps_compute_limited'])} tok/s</span></div>
-            <div class="tp-metric-row"><span class="tp-metric-label">单卡吞吐</span><span class="tp-metric-value">{fmt_compact(result['decode_tps_card'])} tok/s</span></div>
-          </div>
-          <div class="tp-result"><span class="tp-result-label">卡数下界</span><span class="tp-result-value">{result['decode_gpu_count_by_throughput']}</span></div>
-          <div class="tp-result" style="margin-top:10px;"><span class="tp-result-label">Decode 时延检查</span><span class="tp-result-value">{decode_ok}</span></div>
-        </div>
+      <div class="throughput-stage-grid">
+        {prefill_stage_html}
+        {decode_stage_html}
       </div>
       {section_html}
     </div>
@@ -354,7 +571,7 @@ def build_final_summary_html(result: dict[str, Any]) -> str:
     dominant_constraints = list(result.get("dominant_constraints", [])) or ["显存"]
     dominant = " · ".join(dominant_constraints)
     calc_sections = result.get("calculation_process_sections", [])
-    section_html = render_calc_accordion("最终卡数与能力回推细节", calc_sections[3] if len(calc_sections) > 3 else None)
+    section_html = render_calc_accordion("最终卡数与近似能力回推细节", calc_sections[3] if len(calc_sections) > 3 else None)
     cost_html = ""
     if result.get("estimated_total_cost") is not None:
         cost_html = f"""
@@ -369,15 +586,15 @@ def build_final_summary_html(result: dict[str, Any]) -> str:
       <div class="step-header">
         <span class="step-number">3</span>
         <div>
-          <div class="step-title">最终卡数与能力回推</div>
-          <div class="step-subtitle">{render_math_text("先给出 G_req，再回推总吞吐、可持续 QPS 与显存可承载在途量")}</div>
+          <div class="step-title">最终卡数与近似能力回推</div>
+          <div class="step-subtitle">{render_math_text("先给出 G_req，再给出基于必要条件模型的总量近似回推")}</div>
         </div>
       </div>
-      <div class="decision-label">① 三类约束中取需求最高者</div>
+      <div class="decision-label">① 当前版本只按显存约束给采购基线</div>
       <div class="constraint-grid">
-        <div class="constraint-card"><span class="constraint-title">显存压力</span><span class="constraint-value">{result['gpu_count_by_memory']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">由显存占用决定</span></div>
-        <div class="constraint-card"><span class="constraint-title">输入处理压力</span><span class="constraint-value">{result['prefill_gpu_count_by_throughput']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">由输入吞吐决定</span></div>
-        <div class="constraint-card"><span class="constraint-title">输出生成压力</span><span class="constraint-value">{result['decode_gpu_count_by_throughput']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">由输出吞吐决定</span></div>
+        <div class="constraint-card"><span class="constraint-title">采购基线</span><span class="constraint-value">{result['business_gpu_count']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">只由显存约束给出</span></div>
+        <div class="constraint-card"><span class="constraint-title">Prefill 参考</span><span class="constraint-value">{result['prefill_gpu_count_by_throughput']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">{'当前基线满足' if result['prefill_necessity_met_at_baseline'] else f'当前基线仍差 {result["prefill_necessity_gpu_gap"]} 卡'}</span></div>
+        <div class="constraint-card"><span class="constraint-title">Decode 参考</span><span class="constraint-value">{result['decode_gpu_count_by_throughput']}</span><span class="constraint-unit">卡</span><span class="constraint-reason">{'当前基线满足' if result['decode_necessity_met_at_baseline'] else f'当前基线仍差 {result["decode_necessity_gpu_gap"]} 卡'}</span></div>
       </div>
       <div class="final-formula final-summary-card">
         <div class="formula-term formula-result">
@@ -387,10 +604,10 @@ def build_final_summary_html(result: dict[str, Any]) -> str:
       </div>
       <div class="ha-detail-grid">
         <div class="ha-detail-card"><span class="ha-detail-label">主导约束</span><span class="ha-detail-value">{escape(dominant)}</span><span class="ha-detail-meta">业务基线由谁决定</span></div>
-        <div class="ha-detail-card"><span class="ha-detail-label">可持续 QPS</span><span class="ha-detail-value">{fmt_value(result['sustainable_qps_p95'], 2)} req/s</span><span class="ha-detail-meta">按当前配置可长期承接的请求速率</span></div>
+        <div class="ha-detail-card"><span class="ha-detail-label">理论可持续 QPS</span><span class="ha-detail-value">{fmt_value(result['sustainable_qps_p95'], 2)} req/s</span><span class="ha-detail-meta">基于必要条件模型的总量近似，不等于实测 SLA</span></div>
         <div class="ha-detail-card"><span class="ha-detail-label">最大在途请求量</span><span class="ha-detail-value">{result['max_concurrency_by_memory_p95']}</span><span class="ha-detail-meta">显存口径</span></div>
-        <div class="ha-detail-card"><span class="ha-detail-label">每日输出 token</span><span class="ha-detail-value">{fmt_compact(result['daily_decode_token_capacity_p95'])}</span><span class="ha-detail-meta">对应输出生成能力</span></div>
-        <div class="ha-detail-card"><span class="ha-detail-label">每日输入 token</span><span class="ha-detail-value">{fmt_compact(result['daily_prefill_token_capacity_p95'])}</span><span class="ha-detail-meta">对应输入处理能力</span></div>
+        <div class="ha-detail-card"><span class="ha-detail-label">理论每日输出 token</span><span class="ha-detail-value">{fmt_compact(result['daily_decode_token_capacity_p95'])}</span><span class="ha-detail-meta">按理论 Decode 服务率线性回推</span></div>
+        <div class="ha-detail-card"><span class="ha-detail-label">理论每日输入 token</span><span class="ha-detail-value">{fmt_compact(result['daily_prefill_token_capacity_p95'])}</span><span class="ha-detail-meta">按理论 Prefill 服务率线性回推</span></div>
         {cost_html}
       </div>
       {section_html}
